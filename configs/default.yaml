@@ -1,0 +1,22 @@
+# Genomic Variant Classifier Configuration
+data:
+  clinvar_path: "data/raw/clinvar_variant_summary.txt.gz"
+  gnomad_path: "data/raw/gnomad.genomes.v4.sites.vcf.gz"
+  test_size: 0.2
+  random_state: 42
+features:
+  disease_type: "rare"
+  ba1_threshold: 0.05
+  cadd_deleterious_threshold: 25
+  revel_deleterious_threshold: 0.7
+model:
+  weights:
+    xgboost: 0.40
+    random_forest: 0.35
+    neural_network: 0.25
+  calibration_method: isotonic
+evaluation:
+  default_threshold: 0.5
+  optimize_threshold: true
+  threshold_metric: "f1"
+  seed: 42
