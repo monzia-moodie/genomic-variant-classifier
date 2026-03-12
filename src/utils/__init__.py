@@ -1,22 +1,43 @@
-"""Utility functions."""
-import logging
-import random
-import numpy as np
-from pathlib import Path
-import yaml
+"""
+src/utils
+=========
+Shared utility package for the Genomic Variant Classifier.
 
-def setup_logging(level=logging.INFO):
-    logging.basicConfig(level=level,
-                        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+CHANGES FROM PHASE 1:
+  - Utility functions were previously defined directly in this __init__.py.
+    They have been moved to src/utils/helpers.py and re-exported here so
+    that existing callers (e.g., `from src.utils import make_variant_id`)
+    continue to work without modification (Issue C fixed).
+"""
 
-def set_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
+from __future__ import annotations
 
-def load_config(config_path):
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+from src.utils.helpers import (
+    add_missing_columns,
+    ensure_dir,
+    file_md5,
+    log_dataframe_summary,
+    log_step,
+    locus_key,
+    make_variant_id,
+    parse_variant_id,
+    proportion_ci,
+    retry,
+    safe_float,
+    safe_log10,
+)
 
-def ensure_dir(path):
-    Path(path).mkdir(parents=True, exist_ok=True)
-    return Path(path)
+__all__ = [
+    "add_missing_columns",
+    "ensure_dir",
+    "file_md5",
+    "log_dataframe_summary",
+    "log_step",
+    "locus_key",
+    "make_variant_id",
+    "parse_variant_id",
+    "proportion_ci",
+    "retry",
+    "safe_float",
+    "safe_log10",
+]

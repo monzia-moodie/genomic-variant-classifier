@@ -1,3 +1,1 @@
-"""Model modules."""
-from src.models.ensemble import EnsembleClassifier, EnsembleConfig, ModelConfig
-__all__ = ["EnsembleClassifier", "EnsembleConfig", "ModelConfig"]
+"""Model definitions: ensemble, GNN, and base estimators."""

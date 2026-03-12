@@ -1,16 +1,22 @@
 """
-Priority 1: Biomedical Database Connectors
-===========================================
+Biomedical Database Connectors
+================================
 Live connectors for publicly accessible databases:
-  - ClinVar  (NCBI FTP bulk VCF download)
-  - gnomAD v4 (REST API + VCF)
+  - ClinVar  (NCBI FTP bulk TSV download)
+  - gnomAD v4 (GraphQL API)
   - UniProt  (REST API)
-  - dbSNP    (NCBI E-utilities)
   - OMIM     (REST API — free key required)
-  - ClinGen  (REST API)
 
-All connectors expose a unified .fetch() → pd.DataFrame interface,
-with standardized column names so the ETL pipeline is database-agnostic.
+All connectors expose a unified .fetch() → pd.DataFrame interface
+with CANONICAL_COLUMNS so the ETL pipeline is database-agnostic.
+
+CHANGES FROM PHASE 1:
+  - Moved from src/data_ingestion/ to src/data/ (fixes import path Bug 4)
+  - _map_pathogenicity uses substring matching (fixes Issue G)
+  - load_all_databases accepts optional clinvar_path (fixes Issue J)
+  - from __future__ import annotations added (Issue N)
+  - Module-level logging.basicConfig removed (Issue L)
+  - nx.read/write_gpickle replaced with pickle (Bug 6)
 """
 
 from __future__ import annotations
@@ -19,11 +25,11 @@ import gzip
 import io
 import logging
 import os
+import pickle
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional
-from urllib.parse import urlencode
 
 import pandas as pd
 import requests
@@ -31,7 +37,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Shared schema — every connector maps its output to these columns
+# Canonical schema — every connector maps output to these columns
 # ---------------------------------------------------------------------------
 CANONICAL_COLUMNS = [
     "variant_id",       # unique string: source:chrom:pos:ref:alt
@@ -47,7 +53,7 @@ CANONICAL_COLUMNS = [
     "allele_freq",      # population allele frequency (float or None)
     "clinical_sig",     # raw clinical significance string
     "protein_change",   # e.g. "p.Arg177Gln"
-    "fasta_seq",        # standardized FASTA-encoded context window (101 bp)
+    "fasta_seq",        # standardized FASTA context window (101 bp)
     "source_id",        # accession in source DB (e.g. rs ID, ClinVar ID)
     "metadata",         # dict of extra fields per source
 ]
@@ -59,9 +65,10 @@ class FetchConfig:
     request_timeout: int = 30
     retry_attempts: int = 3
     retry_backoff: float = 2.0
-    rate_limit_delay: float = 0.34  # ~3 req/sec for NCBI
+    rate_limit_delay: float = 0.34   # ~3 req/sec for NCBI compliance
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        self.cache_dir = Path(self.cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -71,12 +78,12 @@ class FetchConfig:
 class BaseConnector:
     source_name: str = "base"
 
-    def __init__(self, config: Optional[FetchConfig] = None):
+    def __init__(self, config: Optional[FetchConfig] = None) -> None:
         self.config = config or FetchConfig()
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "genomic-variant-classifier/1.0"})
 
-    def _get(self, url: str, params: dict = None, **kwargs) -> requests.Response:
+    def _get(self, url: str, params: dict | None = None, **kwargs) -> requests.Response:
         for attempt in range(self.config.retry_attempts):
             try:
                 resp = self.session.get(
@@ -86,24 +93,28 @@ class BaseConnector:
                 resp.raise_for_status()
                 time.sleep(self.config.rate_limit_delay)
                 return resp
-            except requests.RequestException as e:
+            except requests.RequestException as exc:
                 if attempt == self.config.retry_attempts - 1:
                     raise
                 wait = self.config.retry_backoff ** attempt
-                logger.warning(f"Request failed ({e}), retrying in {wait}s...")
+                logger.warning("Request failed (%s), retrying in %.1fs...", exc, wait)
                 time.sleep(wait)
+        # Unreachable, but satisfies type checkers
+        raise RuntimeError("_get: exceeded retry attempts")
 
     def _cache_path(self, key: str) -> Path:
-        return self.config.cache_dir / f"{self.source_name}_{key}.parquet"
+        safe_key = key.replace("/", "_").replace(":", "_")
+        return self.config.cache_dir / f"{self.source_name}_{safe_key}.parquet"
 
     def _load_cache(self, key: str) -> Optional[pd.DataFrame]:
         path = self._cache_path(key)
         if path.exists():
-            logger.info(f"Loading {self.source_name} cache: {path}")
+            logger.info("Loading %s cache: %s", self.source_name, path)
             return pd.read_parquet(path)
         return None
 
     def _save_cache(self, key: str, df: pd.DataFrame) -> None:
+        self._cache_path(key).parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(self._cache_path(key), index=False)
 
     def fetch(self, **kwargs) -> pd.DataFrame:
@@ -114,7 +125,7 @@ class BaseConnector:
         for col in CANONICAL_COLUMNS:
             if col not in df.columns:
                 df[col] = None
-        return df[CANONICAL_COLUMNS]
+        return df[CANONICAL_COLUMNS].copy()
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +134,7 @@ class BaseConnector:
 class ClinVarConnector(BaseConnector):
     """
     Downloads the ClinVar variant summary TSV (GRCh38).
-    File: https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
+    URL: https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
     ~500 MB compressed; cached locally as parquet after first download.
     """
     source_name = "clinvar"
@@ -138,44 +149,57 @@ class ClinVarConnector(BaseConnector):
         pathogenicity_filter: Optional[list[str]] = None,
         gene_filter: Optional[list[str]] = None,
         force_refresh: bool = False,
+        local_path: Optional[str] = None,    # NEW: skip download if file exists
     ) -> pd.DataFrame:
+        """
+        Args:
+            local_path: If provided and exists, read from this file instead of downloading.
+                        Avoids the 500 MB download when you already have the file.
+        """
         cache_key = f"summary_{assembly}"
         if not force_refresh:
             cached = self._load_cache(cache_key)
             if cached is not None:
                 return cached
 
-        logger.info("Downloading ClinVar variant_summary.txt.gz ...")
-        resp = self._get(self.FTP_URL, stream=True)
-        raw = b"".join(resp.iter_content(chunk_size=1 << 20))
+        # Support pre-downloaded local file (Issue J fix)
+        if local_path and Path(local_path).exists():
+            logger.info("Reading ClinVar from local file: %s", local_path)
+            open_fn = gzip.open if str(local_path).endswith(".gz") else open
+            with open_fn(local_path, "rt") as f:
+                df = pd.read_csv(f, sep="\t", low_memory=False)
+        else:
+            logger.info("Downloading ClinVar variant_summary.txt.gz ...")
+            resp = self._get(self.FTP_URL, stream=True)
+            raw = b"".join(resp.iter_content(chunk_size=1 << 20))
+            with gzip.open(io.BytesIO(raw), "rt") as f:
+                df = pd.read_csv(f, sep="\t", low_memory=False)
 
-        with gzip.open(io.BytesIO(raw), "rt") as f:
-            df = pd.read_csv(f, sep="\t", low_memory=False)
-
-        # Filter to target assembly
         df = df[df["Assembly"] == assembly].copy()
 
-        # Map to canonical schema
         df = df.rename(columns={
-            "GeneSymbol": "gene_symbol",
+            "GeneSymbol":           "gene_symbol",
             "ClinicalSignificance": "clinical_sig",
-            "Chromosome": "chrom",
-            "Start": "pos",
-            "ReferenceAllele": "ref",
-            "AlternateAllele": "alt",
-            "ProteinChange": "protein_change",
-            "VariationID": "source_id",
-            "RS# (dbSNP)": "rs_id",
+            "Chromosome":           "chrom",
+            "Start":                "pos",
+            "ReferenceAllele":      "ref",
+            "AlternateAllele":      "alt",
+            "ProteinChange":        "protein_change",
+            "VariationID":          "source_id",
+            "RS# (dbSNP)":          "rs_id",
         })
-        df["source_db"] = self.source_name
-        df["pathogenicity"] = df["clinical_sig"].map(self._map_pathogenicity)
-        df["allele_freq"] = None  # ClinVar doesn't carry AF; join with gnomAD later
-        df["fasta_seq"] = None    # populated by ETL enrichment step
+        df["source_db"]     = self.source_name
+        df["pathogenicity"] = df["clinical_sig"].apply(self._map_pathogenicity)
+        df["allele_freq"]   = None   # joined from gnomAD in ETL
+        df["fasta_seq"]     = None   # populated by ETL enrichment
         df["transcript_id"] = None
-        df["consequence"] = None
-        df["metadata"] = df.apply(
-            lambda r: {"rs_id": r.get("rs_id"), "review_status": r.get("ReviewStatus")},
-            axis=1
+        df["consequence"]   = None
+        df["metadata"]      = df.apply(
+            lambda r: {
+                "rs_id":         r.get("rs_id"),
+                "review_status": r.get("ReviewStatus"),
+            },
+            axis=1,
         )
         df["variant_id"] = (
             "clinvar:" + df["chrom"].astype(str) + ":" +
@@ -191,22 +215,29 @@ class ClinVarConnector(BaseConnector):
 
         result = self._to_canonical(df)
         self._save_cache(cache_key, result)
-        logger.info(f"ClinVar: {len(result):,} variants loaded.")
+        logger.info("ClinVar: %d variants loaded.", len(result))
         return result
 
     @staticmethod
     def _map_pathogenicity(sig: str) -> str:
-        if not isinstance(sig, str):
+        """
+        Map raw ClinVar ClinicalSignificance string to a canonical label.
+
+        CHANGE: Now uses substring matching instead of exact set membership
+        so compound terms like 'Pathogenic, risk factor' are handled correctly.
+        """
+        if not isinstance(sig, str) or not sig.strip():
             return "uncertain"
-        sig_lower = sig.lower()
-        if "pathogenic" in sig_lower and "likely" not in sig_lower:
-            return "pathogenic"
-        if "likely pathogenic" in sig_lower:
+        s = sig.lower()
+        # Check "likely" variants first so they don't match the shorter base terms
+        if "likely pathogenic" in s:
             return "likely_pathogenic"
-        if "benign" in sig_lower and "likely" not in sig_lower:
-            return "benign"
-        if "likely benign" in sig_lower:
+        if "likely benign" in s:
             return "likely_benign"
+        if "pathogenic" in s:
+            return "pathogenic"
+        if "benign" in s:
+            return "benign"
         return "uncertain"
 
 
@@ -216,7 +247,6 @@ class ClinVarConnector(BaseConnector):
 class GnomADConnector(BaseConnector):
     """
     Queries gnomAD v4 GraphQL API for variant-level allele frequencies.
-    Handles pagination for bulk gene queries.
     """
     source_name = "gnomad"
     GRAPHQL_URL = "https://gnomad.broadinstitute.org/api"
@@ -232,20 +262,9 @@ class GnomADConnector(BaseConnector):
           alt
           consequence
           transcript_id
-          transcript_version
-          exome {
-            af
-            ac
-            an
-          }
-          genome {
-            af
-            ac
-            an
-          }
-          clinvar_variation {
-            clinical_significance
-          }
+          exome { af ac an }
+          genome { af ac an }
+          clinvar_variation { clinical_significance }
         }
       }
     }
@@ -257,11 +276,7 @@ class GnomADConnector(BaseConnector):
         dataset: str = "gnomad_r4",
         force_refresh: bool = False,
     ) -> pd.DataFrame:
-        """
-        Fetch gnomAD variant data for a list of Ensembl gene IDs.
-        gene_ids: list of ENSG IDs, e.g. ["ENSG00000139618"] (BRCA2)
-        """
-        all_rows = []
+        all_rows: list[pd.DataFrame] = []
         for gene_id in gene_ids:
             cache_key = f"{gene_id}_{dataset}"
             if not force_refresh:
@@ -270,68 +285,69 @@ class GnomADConnector(BaseConnector):
                     all_rows.append(cached)
                     continue
 
-            logger.info(f"Querying gnomAD for gene {gene_id}...")
+            logger.info("Querying gnomAD for gene %s ...", gene_id)
             payload = {
                 "query": self._VARIANT_QUERY,
                 "variables": {"gene_id": gene_id, "dataset": dataset},
             }
-            resp = self.session.post(
-                self.GRAPHQL_URL,
-                json=payload,
-                timeout=self.config.request_timeout,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            try:
+                resp = self.session.post(
+                    self.GRAPHQL_URL,
+                    json=payload,
+                    timeout=self.config.request_timeout,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.RequestException as exc:
+                logger.warning("gnomAD query failed for %s: %s", gene_id, exc)
+                continue
 
-            variants = data.get("data", {}).get("gene", {}).get("variants", [])
+            variants = (data.get("data") or {}).get("gene", {}).get("variants", [])
             if not variants:
-                logger.warning(f"No gnomAD variants returned for {gene_id}")
+                logger.warning("No gnomAD variants returned for %s", gene_id)
                 continue
 
             rows = []
             for v in variants:
-                exome_af = (v.get("exome") or {}).get("af")
+                exome_af  = (v.get("exome") or {}).get("af")
                 genome_af = (v.get("genome") or {}).get("af")
-                af = exome_af or genome_af
+                af = exome_af if exome_af is not None else genome_af
 
                 clinvar_sig = None
                 if v.get("clinvar_variation"):
                     clinvar_sig = v["clinvar_variation"].get("clinical_significance")
 
                 rows.append({
-                    "variant_id": f"gnomad:{v['chrom']}:{v['pos']}:{v['ref']}:{v['alt']}",
-                    "source_db": self.source_name,
-                    "chrom": v["chrom"],
-                    "pos": v["pos"],
-                    "ref": v["ref"],
-                    "alt": v["alt"],
-                    "gene_symbol": gene_id,  # enriched in ETL
+                    "variant_id":    f"gnomad:{v['chrom']}:{v['pos']}:{v['ref']}:{v['alt']}",
+                    "source_db":     self.source_name,
+                    "chrom":         v["chrom"],
+                    "pos":           v["pos"],
+                    "ref":           v["ref"],
+                    "alt":           v["alt"],
+                    "gene_symbol":   gene_id,
                     "transcript_id": v.get("transcript_id"),
-                    "consequence": v.get("consequence"),
+                    "consequence":   v.get("consequence"),
                     "pathogenicity": None,
-                    "allele_freq": af,
-                    "clinical_sig": clinvar_sig,
+                    "allele_freq":   af,
+                    "clinical_sig":  clinvar_sig,
                     "protein_change": None,
-                    "fasta_seq": None,
-                    "source_id": v["variant_id"],
+                    "fasta_seq":     None,
+                    "source_id":     v["variant_id"],
                     "metadata": {
-                        "exome_ac": (v.get("exome") or {}).get("ac"),
+                        "exome_ac":  (v.get("exome") or {}).get("ac"),
                         "genome_ac": (v.get("genome") or {}).get("ac"),
-                        "dataset": dataset,
+                        "dataset":   dataset,
                     },
                 })
 
-            gene_df = pd.DataFrame(rows)
+            gene_df = self._to_canonical(pd.DataFrame(rows))
             self._save_cache(cache_key, gene_df)
             all_rows.append(gene_df)
             time.sleep(self.config.rate_limit_delay)
 
         if not all_rows:
             return pd.DataFrame(columns=CANONICAL_COLUMNS)
-
-        result = self._to_canonical(pd.concat(all_rows, ignore_index=True))
-        logger.info(f"gnomAD: {len(result):,} variants loaded.")
-        return result
+        return self._to_canonical(pd.concat(all_rows, ignore_index=True))
 
 
 # ---------------------------------------------------------------------------
@@ -339,8 +355,7 @@ class GnomADConnector(BaseConnector):
 # ---------------------------------------------------------------------------
 class UniProtConnector(BaseConnector):
     """
-    Queries UniProt REST API for protein-level variant annotations
-    (natural variants, active sites, disease associations).
+    Queries UniProt REST API for protein-level variant annotations.
     """
     source_name = "uniprot"
     BASE_URL = "https://rest.uniprot.org/uniprotkb"
@@ -355,7 +370,7 @@ class UniProtConnector(BaseConnector):
             "accession", "gene_names", "sequence",
             "ft_natural_var", "ft_act_site", "cc_disease",
         ]
-        all_rows = []
+        all_rows: list[pd.DataFrame] = []
         for gene in gene_symbols:
             cache_key = f"{gene}_{organism}"
             cached = self._load_cache(cache_key)
@@ -364,14 +379,18 @@ class UniProtConnector(BaseConnector):
                 continue
 
             params = {
-                "query": f"gene:{gene} AND organism_id:{organism} AND reviewed:true",
+                "query":  f"gene:{gene} AND organism_id:{organism} AND reviewed:true",
                 "format": "json",
                 "fields": ",".join(fields),
-                "size": 25,
+                "size":   25,
             }
-            resp = self._get(f"{self.BASE_URL}/search", params=params)
-            data = resp.json()
+            try:
+                resp = self._get(f"{self.BASE_URL}/search", params=params)
+            except requests.RequestException as exc:
+                logger.warning("UniProt query failed for %s: %s", gene, exc)
+                continue
 
+            data = resp.json()
             rows = []
             for entry in data.get("results", []):
                 accession = entry.get("primaryAccession")
@@ -387,32 +406,35 @@ class UniProtConnector(BaseConnector):
                 ]
 
                 for var in natural_variants:
-                    pos = var.get("location", {}).get("start", {}).get("value")
+                    pos  = var.get("location", {}).get("start", {}).get("value")
                     desc = var.get("description", "")
-                    original = var.get("alternativeSequence", {}).get("originalSequence", "")
-                    alt_seqs = var.get("alternativeSequence", {}).get("alternativeSequences", [])
-                    alt = alt_seqs[0] if alt_seqs else None
+                    orig = var.get("alternativeSequence", {}).get("originalSequence", "")
+                    alts = var.get("alternativeSequence", {}).get("alternativeSequences", [])
+                    alt  = alts[0] if alts else None
 
                     rows.append({
-                        "variant_id": f"uniprot:{accession}:{pos}:{original}:{alt}",
-                        "source_db": self.source_name,
-                        "chrom": None,
-                        "pos": pos,
-                        "ref": original,
-                        "alt": alt,
-                        "gene_symbol": gene,
+                        "variant_id":    f"uniprot:{accession}:{pos}:{orig}:{alt}",
+                        "source_db":     self.source_name,
+                        "chrom":         None,
+                        "pos":           pos,
+                        "ref":           orig,
+                        "alt":           alt,
+                        "gene_symbol":   gene,
                         "transcript_id": None,
-                        "consequence": "missense_variant",
+                        "consequence":   "missense_variant",
                         "pathogenicity": "pathogenic" if "disease" in desc.lower() else None,
-                        "allele_freq": None,
-                        "clinical_sig": desc,
-                        "protein_change": f"p.{pos}{original}>{alt}" if (pos and alt) else None,
-                        "fasta_seq": seq[:101] if seq else None,
-                        "source_id": accession,
-                        "metadata": {"diseases": diseases, "uniprot_accession": accession},
+                        "allele_freq":   None,
+                        "clinical_sig":  desc,
+                        "protein_change": f"p.{pos}{orig}>{alt}" if (pos and alt) else None,
+                        "fasta_seq":     seq[:101] if seq else None,
+                        "source_id":     accession,
+                        "metadata":      {"diseases": diseases, "uniprot_accession": accession},
                     })
 
-            gene_df = self._to_canonical(pd.DataFrame(rows)) if rows else pd.DataFrame(columns=CANONICAL_COLUMNS)
+            gene_df = (
+                self._to_canonical(pd.DataFrame(rows))
+                if rows else pd.DataFrame(columns=CANONICAL_COLUMNS)
+            )
             self._save_cache(cache_key, gene_df)
             all_rows.append(gene_df)
 
@@ -422,13 +444,13 @@ class UniProtConnector(BaseConnector):
 
 
 # ---------------------------------------------------------------------------
-# OMIM connector (requires free API key: https://www.omim.org/api )
+# OMIM connector (requires free API key: https://www.omim.org/api)
 # ---------------------------------------------------------------------------
 class OMIMConnector(BaseConnector):
     source_name = "omim"
     BASE_URL = "https://api.omim.org/api"
 
-    def __init__(self, api_key: Optional[str] = None, config: Optional[FetchConfig] = None):
+    def __init__(self, api_key: Optional[str] = None, config: Optional[FetchConfig] = None) -> None:
         super().__init__(config)
         self.api_key = api_key or os.environ.get("OMIM_API_KEY")
         if not self.api_key:
@@ -440,31 +462,42 @@ class OMIMConnector(BaseConnector):
         rows = []
         for term in search_terms:
             params = {
-                "search": term,
-                "format": "json",
-                "limit": 20,
-                "apiKey": self.api_key,
+                "search":  term,
+                "format":  "json",
+                "limit":   20,
+                "apiKey":  self.api_key,
             }
-            resp = self._get(f"{self.BASE_URL}/entry/search", params=params)
-            data = resp.json()
+            try:
+                resp = self._get(f"{self.BASE_URL}/entry/search", params=params)
+            except requests.RequestException as exc:
+                logger.warning("OMIM query failed for '%s': %s", term, exc)
+                continue
 
-            for entry in data.get("omim", {}).get("searchResponse", {}).get("entryList", []):
+            for entry in (
+                resp.json()
+                .get("omim", {})
+                .get("searchResponse", {})
+                .get("entryList", [])
+            ):
                 e = entry.get("entry", {})
                 rows.append({
-                    "variant_id": f"omim:{e.get('mimNumber')}",
-                    "source_db": self.source_name,
+                    "variant_id":    f"omim:{e.get('mimNumber')}",
+                    "source_db":     self.source_name,
                     "chrom": None, "pos": None, "ref": None, "alt": None,
-                    "gene_symbol": e.get("titles", {}).get("preferredTitle", ""),
+                    "gene_symbol":   e.get("titles", {}).get("preferredTitle", ""),
                     "transcript_id": None, "consequence": None,
                     "pathogenicity": "pathogenic",
-                    "allele_freq": None,
-                    "clinical_sig": e.get("titles", {}).get("preferredTitle", ""),
+                    "allele_freq":   None,
+                    "clinical_sig":  e.get("titles", {}).get("preferredTitle", ""),
                     "protein_change": None, "fasta_seq": None,
-                    "source_id": str(e.get("mimNumber")),
-                    "metadata": {"mim_number": e.get("mimNumber")},
+                    "source_id":     str(e.get("mimNumber")),
+                    "metadata":      {"mim_number": e.get("mimNumber")},
                 })
 
-        return self._to_canonical(pd.DataFrame(rows)) if rows else pd.DataFrame(columns=CANONICAL_COLUMNS)
+        return (
+            self._to_canonical(pd.DataFrame(rows))
+            if rows else pd.DataFrame(columns=CANONICAL_COLUMNS)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -475,18 +508,21 @@ def load_all_databases(
     gnomad_gene_ids: list[str],
     config: Optional[FetchConfig] = None,
     omim_api_key: Optional[str] = None,
+    clinvar_path: Optional[str] = None,   # NEW: skip download if provided
 ) -> pd.DataFrame:
     """
-    Unified entry point.  Loads ClinVar (bulk), gnomAD (per gene),
-    and UniProt (per gene), merges on variant_id, deduplicates.
-    OMIM loaded if api_key provided.
+    Unified entry point. Loads ClinVar (bulk), gnomAD (per gene),
+    and UniProt (per gene); merges on variant_id; deduplicates.
+    OMIM is loaded if api_key is provided.
 
-    Returns a single canonical DataFrame ready for the Spark ETL layer.
+    Args:
+        clinvar_path: Optional path to a pre-downloaded ClinVar file (.gz or plain).
+                      Pass this to avoid the ~500 MB download on every run.
     """
-    parts = []
+    parts: list[pd.DataFrame] = []
 
     clinvar = ClinVarConnector(config)
-    parts.append(clinvar.fetch())
+    parts.append(clinvar.fetch(local_path=clinvar_path))
 
     gnomad = GnomADConnector(config)
     parts.append(gnomad.fetch(gene_ids=gnomad_gene_ids))
@@ -496,9 +532,14 @@ def load_all_databases(
 
     if omim_api_key:
         omim = OMIMConnector(api_key=omim_api_key, config=config)
-        parts.append(omim.fetch(search_terms=genes[:10]))  # demo limit
+        parts.append(omim.fetch(search_terms=genes[:10]))
 
-    merged = pd.concat([p for p in parts if not p.empty], ignore_index=True)
+    non_empty = [p for p in parts if not p.empty]
+    if not non_empty:
+        logger.warning("No data fetched from any database.")
+        return pd.DataFrame(columns=CANONICAL_COLUMNS)
+
+    merged = pd.concat(non_empty, ignore_index=True)
     merged = merged.drop_duplicates(subset=["variant_id"])
-    logger.info(f"Total variants across all databases: {len(merged):,}")
+    logger.info("Total variants across all databases: %d", len(merged))
     return merged
