@@ -1,37 +1,53 @@
-# Byte-compiled files
+```
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-# Distribution
-build/
-dist/
+*.pyc
+*.pyo
+*.pyd
+.Python
 *.egg-info/
-# Virtual environments
+dist/
+build/
+
+# Virtual environment — never commit this
 .venv/
 venv/
 env/
-# IDE
-.idea/
-.vscode/
-# Jupyter
-.ipynb_checkpoints/
-# Data (too large)
-data/raw/*
-data/processed/*
-data/external/*
-!data/*/.gitkeep
-# Models (too large)
-models/saved/*
-models/checkpoints/*
-!models/*/.gitkeep
-# Logs
-logs/*
-!logs/.gitkeep
-# Environment
+
+# Secrets — NEVER commit these
 .env
-# OS
+*.key
+*.token
+
+# Large genomic data files
+genomic_variant_classifier/data/raw/
+genomic_variant_classifier/data/processed/
+genomic_variant_classifier/data/images/
+*.parquet
+*.vcf
+*.vcf.gz
+*.svs
+*.tsv.gz
+*.bam
+*.bai
+
+# Model weights (large binaries)
+genomic_variant_classifier/models/*.pt
+genomic_variant_classifier/models/*.pkl
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# OS files
 .DS_Store
-# Testing
-.coverage
-.pytest_cache/
+Thumbs.db
+
+# VS Code — keep workspace file, ignore personal settings
+.vscode/settings.json
+.vscode/launch.json
+!genomic-variant-classifier.code-workspace
+
+# Logs
+*.log
+genomic_variant_classifier/logs/

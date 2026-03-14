@@ -1,0 +1,46 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+		"python.terminal.activateEnvironment": true,
+		"editor.formatOnSave": true,
+		"editor.rulers": [
+			100
+		],
+		"files.exclude": {
+			"**/__pycache__": true,
+			"**/*.pyc": true,
+			"**/.DS_Store": true,
+			"**/genomic_variant_classifier/data/raw/**": false,
+			"**/genomic_variant_classifier/data/processed/**": false
+		},
+		"notebook.lineNumbers": "on",
+		"notebook.output.scrolling": true,
+		"jupyter.notebookFileRoot": "${workspaceFolder}",
+		"files.watcherExclude": {
+			"**/genomic_variant_classifier/data/**": true,
+			"**/.git/objects/**": true
+		},
+		"[python]": {
+			"editor.defaultFormatter": "ms-python.black-formatter"
+		}
+	},
+	"extensions": {
+		"recommendations": [
+			"ms-python.python",
+			"ms-python.vscode-pylance",
+			"ms-python.black-formatter",
+			"ms-toolsai.jupyter",
+			"ms-toolsai.jupyter-keymap",
+			"eamodio.gitlens",
+			"github.copilot",
+			"redhat.vscode-yaml",
+			"ms-azuretools.vscode-docker",
+			"mechatroner.rainbow-csv"
+		]
+	}
+}
