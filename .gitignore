@@ -27,9 +27,16 @@ genomic_variant_classifier/data/images/
 *.vcf
 *.vcf.gz
 *.svs
+*.tsv
 *.tsv.gz
 *.bam
 *.bai
+
+# AlphaMissense data directory (large reference file)
+AlphaMissense_hg38.tsv/
+
+# Notebook run outputs (data, logs, models, reports generated at runtime)
+notebooks/genomic_variant_classifier/
 
 # Model weights (large binaries)
 genomic_variant_classifier/models/*.pt
