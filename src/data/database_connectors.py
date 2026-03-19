@@ -220,16 +220,13 @@ class ClinVarConnector(BaseConnector):
 
     @staticmethod
     def _map_pathogenicity(sig: str) -> str:
-        """
-        Map raw ClinVar ClinicalSignificance string to a canonical label.
-
-        CHANGE: Now uses substring matching instead of exact set membership
-        so compound terms like 'Pathogenic, risk factor' are handled correctly.
-        """
         if not isinstance(sig, str) or not sig.strip():
             return "uncertain"
         s = sig.lower()
-        # Check "likely" variants first so they don't match the shorter base terms
+        if s.startswith("pathogenic"):
+            return "pathogenic"
+        if s.startswith("benign"):
+            return "benign"
         if "likely pathogenic" in s:
             return "likely_pathogenic"
         if "likely benign" in s:

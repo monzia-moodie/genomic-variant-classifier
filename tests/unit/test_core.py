@@ -140,6 +140,7 @@ class TestETLNormalization:
     """Test normalization logic without requiring a live Spark session."""
 
     def test_chrom_map_completeness(self):
+        pytest.importorskip("pyspark")
         from src.data.spark_etl import CHROM_MAP
         for i in range(1, 23):
             assert str(i) in CHROM_MAP, f"Missing bare chromosome {i}"
@@ -148,6 +149,7 @@ class TestETLNormalization:
         assert "chrX" in CHROM_MAP
 
     def test_chrom_normalization_values(self):
+        pytest.importorskip("pyspark")
         from src.data.spark_etl import CHROM_MAP
         assert CHROM_MAP["chr1"] == "1"
         assert CHROM_MAP["chrX"] == "X"
@@ -155,6 +157,7 @@ class TestETLNormalization:
         assert CHROM_MAP["MT"] == "MT"
 
     def test_schema_has_required_fields(self):
+        pytest.importorskip("pyspark")
         from src.data.spark_etl import VARIANT_SCHEMA
         field_names = [f.name for f in VARIANT_SCHEMA]
         for required in ["variant_id", "chrom", "pos", "ref", "alt", "pathogenicity"]:
@@ -291,9 +294,10 @@ class TestValidationMetrics:
 class TestClinicalEvaluator:
     def _make_data(self, n: int = 300):
         rng = np.random.default_rng(42)
-        y_true  = rng.integers(0, 2, n)
-        y_proba = np.clip(y_true * 0.6 + rng.uniform(-0.3, 0.3, n), 0, 1)
-        return y_true, y_proba
+        y = rng.integers(0, 2, size=n)
+        signal = y.astype(float) + rng.normal(0, 0.8, size=n)
+        p = 1 / (1 + np.exp(-signal))
+        return y, p
 
     def test_evaluate_returns_report(self):
         from src.evaluation.evaluator import ClinicalEvaluator, EvaluationReport

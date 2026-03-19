@@ -173,6 +173,8 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     feats["in_domain"]      = df.get("in_domain",      pd.Series([0] * len(df), index=df.index)).fillna(0).astype(int)
 
     # Validate
+    feats = feats[TABULAR_FEATURES]
+    feats = feats[TABULAR_FEATURES]
     assert list(feats.columns) == TABULAR_FEATURES, (
         f"Feature column mismatch. Expected {TABULAR_FEATURES}, got {list(feats.columns)}"
     )
