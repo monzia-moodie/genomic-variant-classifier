@@ -583,3 +583,202 @@ class TestGTExConnector:
         assert "Whole_Blood"     in PRIORITY_TISSUES
         assert "Brain_Cortex"    in PRIORITY_TISSUES
         assert "Liver"           in PRIORITY_TISSUES
+        
+        
+    # ---------------------------------------------------------------------------
+# Tests: src/data/spliceai.py -- Phase 2 Pillar 1, Connector 2
+# ---------------------------------------------------------------------------
+class TestSpliceAIConnector:
+    """Unit tests for SpliceAIConnector. No real VCF file required."""
+ 
+    # ── Identity ──────────────────────────────────────────────────────────
+ 
+    def test_source_name(self):
+        from src.data.spliceai import SpliceAIConnector
+        assert SpliceAIConnector.source_name == "spliceai"
+ 
+    def test_inherits_base_connector(self):
+        from src.data.spliceai import SpliceAIConnector
+        from src.data.database_connectors import BaseConnector
+        assert issubclass(SpliceAIConnector, BaseConnector)
+ 
+    # ── parse_info_field ──────────────────────────────────────────────────
+ 
+    def test_parse_info_field_single_gene(self):
+        from src.data.spliceai import SpliceAIConnector
+        result = SpliceAIConnector.parse_info_field(
+            "T|BRCA1|0.85|0.00|0.00|0.00|-22|11|5|-32"
+        )
+        assert result["splice_ai_score"] == pytest.approx(0.85)
+        assert result["ds_ag"]           == pytest.approx(0.85)
+        assert result["ds_al"]           == pytest.approx(0.00)
+        assert result["symbol"]          == "BRCA1"
+ 
+    def test_parse_info_field_takes_max_across_delta_scores(self):
+        from src.data.spliceai import SpliceAIConnector
+        result = SpliceAIConnector.parse_info_field(
+            "A|TP53|0.01|0.02|0.03|0.72|0|0|0|0"
+        )
+        assert result["splice_ai_score"] == pytest.approx(0.72)
+        assert result["ds_dl"]           == pytest.approx(0.72)
+ 
+    def test_parse_info_field_multi_gene_takes_max(self):
+        from src.data.spliceai import SpliceAIConnector
+        result = SpliceAIConnector.parse_info_field(
+            "T|BRCA1|0.01|0.00|0.00|0.03|-22|11|5|-32,"
+            "T|NBR1|0.00|0.00|0.45|0.00|1|-3|4|-2"
+        )
+        assert result["splice_ai_score"] == pytest.approx(0.45)
+        assert result["symbol"]          == "NBR1"
+ 
+    def test_parse_info_field_empty_returns_zero(self):
+        from src.data.spliceai import SpliceAIConnector
+        assert SpliceAIConnector.parse_info_field("")["splice_ai_score"]    == 0.0
+        assert SpliceAIConnector.parse_info_field("   ")["splice_ai_score"] == 0.0
+ 
+    def test_parse_info_field_malformed_does_not_raise(self):
+        from src.data.spliceai import SpliceAIConnector
+        result = SpliceAIConnector.parse_info_field("T|BRCA1|notafloat|0.0|0.0|0.0")
+        assert result["splice_ai_score"] == 0.0
+ 
+    # ── fetch() with no VCF file ──────────────────────────────────────────
+ 
+    def test_fetch_no_vcf_path_returns_zero_scores(self):
+        from src.data.spliceai import SpliceAIConnector
+        connector  = SpliceAIConnector(vcf_path=None)
+        variant_df = pd.DataFrame({
+            "variant_id": ["clinvar:17:43071077:G:T"],
+            "source_db":  ["clinvar"],
+            "chrom": ["17"], "pos": [43071077], "ref": ["G"], "alt": ["T"],
+        })
+        result = connector.fetch(variant_df=variant_df)
+        assert "splice_ai_score" in result.columns
+        assert result["splice_ai_score"].iloc[0] == 0.0
+ 
+    def test_fetch_missing_vcf_file_returns_zero_scores(self, tmp_path):
+        from src.data.spliceai import SpliceAIConnector
+        connector  = SpliceAIConnector(vcf_path=tmp_path / "nonexistent.vcf.gz")
+        variant_df = pd.DataFrame({
+            "variant_id": ["clinvar:17:43071077:G:T"],
+            "source_db":  ["clinvar"],
+            "chrom": ["17"], "pos": [43071077], "ref": ["G"], "alt": ["T"],
+        })
+        result = connector.fetch(variant_df=variant_df)
+        assert result["splice_ai_score"].iloc[0] == 0.0
+ 
+    def test_fetch_empty_dataframe_returns_empty(self):
+        from src.data.spliceai import SpliceAIConnector
+        connector = SpliceAIConnector(vcf_path=None)
+        result    = connector.fetch(variant_df=pd.DataFrame())
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 0
+ 
+    # ── fetch() with a real (mock) VCF file ──────────────────────────────
+ 
+    def test_fetch_with_mock_vcf_correct_scores(self, tmp_path):
+        import gzip
+        from src.data.spliceai import SpliceAIConnector
+        from src.data.database_connectors import FetchConfig
+ 
+        vcf_lines = (
+            "##fileformat=VCFv4.2\n"
+            "##INFO=<ID=SpliceAI,Number=.,Type=String,Description=\"SpliceAI\">\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "chr17\t43071077\t.\tG\tT\t.\t.\t"
+            "SpliceAI=T|BRCA1|0.01|0.00|0.00|0.00|-22|11|5|-32\n"
+            "chr17\t43071077\t.\tG\tA\t.\t.\t"
+            "SpliceAI=A|BRCA1|0.85|0.00|0.00|0.00|-22|11|5|-32\n"
+            "chr1\t925952\t.\tG\tA\t.\t.\t"
+            "SpliceAI=A|AGRN|0.00|0.00|0.05|0.00|0|0|0|0\n"
+        )
+        vcf_path = tmp_path / "test.vcf.gz"
+        with gzip.open(vcf_path, "wt", encoding="utf-8") as f:
+            f.write(vcf_lines)
+ 
+        config    = FetchConfig(cache_dir=tmp_path / "cache")
+        connector = SpliceAIConnector(vcf_path=vcf_path, config=config)
+        variant_df = pd.DataFrame({
+            "variant_id": [
+                "clinvar:17:43071077:G:T",
+                "clinvar:17:43071077:G:A",
+                "clinvar:1:925952:G:A",
+            ],
+            "source_db":  ["clinvar"] * 3,
+            "chrom": ["17", "17", "1"],
+            "pos":   [43071077, 43071077, 925952],
+            "ref":   ["G", "G", "G"],
+            "alt":   ["T", "A", "A"],
+        })
+ 
+        result = connector.fetch(variant_df=variant_df)
+        assert "splice_ai_score" in result.columns
+        assert len(result) == 3
+        scores = result.set_index("variant_id")["splice_ai_score"]
+        assert scores["clinvar:17:43071077:G:T"] == pytest.approx(0.01)
+        assert scores["clinvar:17:43071077:G:A"] == pytest.approx(0.85)
+        assert scores["clinvar:1:925952:G:A"]    == pytest.approx(0.05)
+ 
+    def test_fetch_unknown_variant_gets_zero(self, tmp_path):
+        import gzip
+        from src.data.spliceai import SpliceAIConnector
+        from src.data.database_connectors import FetchConfig
+ 
+        vcf_lines = (
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "chr17\t43071077\t.\tG\tT\t.\t.\t"
+            "SpliceAI=T|BRCA1|0.50|0.00|0.00|0.00|0|0|0|0\n"
+        )
+        vcf_path = tmp_path / "test.vcf.gz"
+        with gzip.open(vcf_path, "wt", encoding="utf-8") as f:
+            f.write(vcf_lines)
+ 
+        config    = FetchConfig(cache_dir=tmp_path / "cache")
+        connector = SpliceAIConnector(vcf_path=vcf_path, config=config)
+        variant_df = pd.DataFrame({
+            "variant_id": ["clinvar:1:999999:A:C"],
+            "source_db":  ["clinvar"],
+            "chrom": ["1"], "pos": [999999], "ref": ["A"], "alt": ["C"],
+        })
+        result = connector.fetch(variant_df=variant_df)
+        assert result["splice_ai_score"].iloc[0] == 0.0
+ 
+    def test_parquet_cache_used_on_second_call(self, tmp_path):
+        import gzip
+        from src.data.spliceai import SpliceAIConnector
+        from src.data.database_connectors import FetchConfig
+ 
+        vcf_lines = (
+            "##fileformat=VCFv4.2\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "chr17\t43071077\t.\tG\tT\t.\t.\t"
+            "SpliceAI=T|BRCA1|0.42|0.00|0.00|0.00|0|0|0|0\n"
+        )
+        vcf_path = tmp_path / "test.vcf.gz"
+        with gzip.open(vcf_path, "wt", encoding="utf-8") as f:
+            f.write(vcf_lines)
+ 
+        config     = FetchConfig(cache_dir=tmp_path / "cache")
+        connector  = SpliceAIConnector(vcf_path=vcf_path, config=config)
+        variant_df = pd.DataFrame({
+            "variant_id": ["clinvar:17:43071077:G:T"],
+            "source_db":  ["clinvar"],
+            "chrom": ["17"], "pos": [43071077], "ref": ["G"], "alt": ["T"],
+        })
+ 
+        connector.fetch(variant_df=variant_df)   # builds the cache
+        vcf_path.unlink()                         # delete the VCF
+ 
+        connector2 = SpliceAIConnector(vcf_path=vcf_path, config=config)
+        result2    = connector2.fetch(variant_df=variant_df)
+        assert result2["splice_ai_score"].iloc[0] == pytest.approx(0.42)
+ 
+    # ── Integration with variant_ensemble.py ─────────────────────────────
+ 
+    def test_splice_ai_score_in_phase2_features(self):
+        from src.models.variant_ensemble import PHASE_2_FEATURES
+        assert "splice_ai_score" in PHASE_2_FEATURES
+ 
+    def test_splice_ai_score_not_in_tabular_features(self):
+        from src.models.variant_ensemble import TABULAR_FEATURES
+        assert "splice_ai_score" not in TABULAR_FEATURES
