@@ -40,6 +40,7 @@ python-dotenv>=1.0
 pyyaml>=6.0
 nbformat>=5.9
 requests>=2.31
+pybigtools>=0.2.5
 
 # Image processing (for TCGA slides)
 Pillow>=10.0

@@ -60,6 +60,7 @@ genomic_variant_classifier/logs/
 
 # Scratch / temp files
 test_revel_block.py
+test_phylop_block.py
 test_run_pre_commit.txt
 
 # ── Large data files ──────────────────────────────────────────────
