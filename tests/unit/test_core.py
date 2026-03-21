@@ -2154,3 +2154,192 @@ class TestPhyloPConnector:
         feats = engineer_features(annotated)
 
         assert feats.loc[0, "phylop_score"] == pytest.approx(7.5)
+
+# ---------------------------------------------------------------------------
+# Tests: pipeline wiring in real_data_prep.py
+# ---------------------------------------------------------------------------
+class TestAnnotationPipeline:
+    """Tests for DataPrepPipeline._annotate_scores() and AnnotationConfig."""
+
+    @pytest.fixture
+    def minimal_canonical_df(self):
+        return pd.DataFrame({
+            "variant_id":    ["clinvar:17:43071077:G:T", "clinvar:1:925952:G:A"],
+            "chrom":         ["17", "1"],
+            "pos":           [43071077, 925952],
+            "ref":           ["G", "G"],
+            "alt":           ["T", "A"],
+            "consequence":   ["missense_variant", "splice_donor_variant"],
+            "gene_symbol":   ["BRCA1", "AGRN"],
+            "allele_freq":   [0.0001, 0.05],
+            "pathogenicity": ["pathogenic", "benign"],
+            "clinical_sig":  ["Pathogenic", "Benign"],
+            "source_db":     ["clinvar", "clinvar"],
+            "transcript_id": [None, None],
+            "protein_change":["p.Arg20Trp", None],
+            "fasta_seq":     [None, None],
+            "source_id":     ["12345", "12346"],
+            "metadata":      [{}, {}],
+        })
+
+    def test_annotation_config_imports(self):
+        from src.data.real_data_prep import AnnotationConfig
+        cfg = AnnotationConfig()
+        assert cfg.dbnsfp_path   is None
+        assert cfg.phylop_path   is None
+        assert cfg.spliceai_path is None
+        assert cfg.annotate_cadd is False
+
+    def test_annotation_config_all_none_is_default(self):
+        from src.data.real_data_prep import AnnotationConfig
+        cfg = AnnotationConfig()
+        assert all(
+            getattr(cfg, f) is None
+            for f in ["dbnsfp_path", "phylop_path", "spliceai_path"]
+        )
+
+    def test_sift_defaults_consistent_across_modules(self):
+        from src.data.sift_polyphen import DEFAULT_SIFT
+        from src.models.variant_ensemble import engineer_features
+        df = pd.DataFrame({
+            "chrom": ["1"], "pos": [100], "ref": ["A"], "alt": ["T"],
+            "consequence": ["intron_variant"], "allele_freq": [0.01],
+        })
+        feats = engineer_features(df)
+        assert feats.loc[0, "sift_score"] == DEFAULT_SIFT == 0.5
+
+    def test_sift_score_fill_is_not_threshold(self):
+        import pathlib
+        src = pathlib.Path("src/data/real_data_prep.py").read_text()
+        assert '"sift_score":       0.5,' in src
+        assert '"sift_score":       0.05,' not in src
+
+    def test_annotate_scores_stub_mode_no_raise(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
+        result = pipeline._annotate_scores(minimal_canonical_df)
+        assert result is not minimal_canonical_df
+
+    def test_annotate_scores_adds_all_score_columns(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
+        result = pipeline._annotate_scores(minimal_canonical_df)
+        for col in ["sift_score", "polyphen2_score", "revel_score",
+                    "cadd_phred", "phylop_score", "gerp_score"]:
+            assert col in result.columns, f"Missing: {col}"
+
+    def test_annotate_scores_adds_splice_ai_column(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
+        result = pipeline._annotate_scores(minimal_canonical_df)
+        assert "splice_ai_score" in result.columns
+
+    def test_annotate_scores_stub_values_are_defaults(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from src.data.dbnsfp import DEFAULT_SIFT, DEFAULT_PP2, DEFAULT_REVEL
+        from src.data.dbnsfp import DEFAULT_CADD, DEFAULT_GERP
+        pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
+        result = pipeline._annotate_scores(minimal_canonical_df)
+        assert (result["sift_score"]      == DEFAULT_SIFT).all()
+        assert (result["polyphen2_score"] == DEFAULT_PP2).all()
+        assert (result["revel_score"]     == DEFAULT_REVEL).all()
+        assert (result["cadd_phred"]      == DEFAULT_CADD).all()
+        assert (result["gerp_score"]      == DEFAULT_GERP).all()
+        assert (result["splice_ai_score"] == 0.0).all()
+
+    def test_annotate_scores_no_nans(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
+        result = pipeline._annotate_scores(minimal_canonical_df)
+        for col in ["sift_score", "polyphen2_score", "revel_score",
+                    "cadd_phred", "phylop_score", "gerp_score", "splice_ai_score"]:
+            assert not result[col].isna().any(), f"NaN in {col}"
+
+    def test_annotate_scores_preserves_input_columns(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
+        result = pipeline._annotate_scores(minimal_canonical_df)
+        for col in minimal_canonical_df.columns:
+            assert col in result.columns
+
+    def test_cadd_skipped_when_annotate_cadd_false(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from unittest.mock import patch
+        pipeline = DataPrepPipeline(
+            annotation_config=AnnotationConfig(annotate_cadd=False)
+        )
+        with patch("src.data.cadd.CADDConnector.fetch") as mock_fetch:
+            pipeline._annotate_scores(minimal_canonical_df)
+            mock_fetch.assert_not_called()
+
+    def test_cadd_called_when_annotate_cadd_true(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from unittest.mock import patch, MagicMock
+        pipeline = DataPrepPipeline(
+            annotation_config=AnnotationConfig(annotate_cadd=True)
+        )
+        with patch("src.data.real_data_prep.CADDConnector") as MockCADD:
+            mock_instance = MagicMock()
+            mock_instance.fetch.return_value = minimal_canonical_df.copy()
+            MockCADD.return_value = mock_instance
+            pipeline._annotate_scores(minimal_canonical_df)
+            mock_instance.fetch.assert_called_once()
+
+    def test_real_scores_flow_through_to_features(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from src.models.variant_ensemble import engineer_features, TABULAR_FEATURES
+        from unittest.mock import patch
+
+        pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
+
+        def fake_annotate(df, **kw):
+            out = df.copy()
+            out["sift_score"]      = [0.03, 0.5]
+            out["polyphen2_score"] = [0.95, 0.5]
+            out["revel_score"]     = [0.87, 0.5]
+            out["cadd_phred"]      = [28.4, 15.0]
+            out["phylop_score"]    = [7.2,  0.0]
+            out["gerp_score"]      = [5.1,  0.0]
+            return out
+
+        with patch("src.data.real_data_prep.DbNSFPConnector") as MockDB:
+            MockDB.return_value.annotate_dataframe.side_effect = fake_annotate
+            annotated = pipeline._annotate_scores(minimal_canonical_df)
+
+        feats = engineer_features(annotated)
+        assert feats.shape[1] == len(TABULAR_FEATURES)
+        assert feats.loc[0, "sift_score"]  == pytest.approx(0.03)
+        assert feats.loc[0, "gerp_score"]  == pytest.approx(5.1)
+
+    def test_annotation_sequence_dbnsfp_before_phylop(self, minimal_canonical_df):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from unittest.mock import patch
+
+        call_order = []
+        pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
+
+        with patch("src.data.real_data_prep.DbNSFPConnector") as MockDB, \
+             patch("src.data.real_data_prep.PhyloPConnector") as MockPP:
+            def db_side(df, **kw):
+                call_order.append("dbnsfp")
+                return df.copy()
+            def pp_side(df, **kw):
+                call_order.append("phylop")
+                return df.copy()
+            MockDB.return_value.annotate_dataframe.side_effect = db_side
+            MockPP.return_value.annotate_dataframe.side_effect = pp_side
+            pipeline._annotate_scores(minimal_canonical_df)
+
+        assert call_order.index("dbnsfp") < call_order.index("phylop")
+
+    def test_pipeline_accepts_annotation_config(self):
+        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        cfg = AnnotationConfig(annotate_cadd=True)
+        pipeline = DataPrepPipeline(annotation_config=cfg)
+        assert pipeline.annotation_config.annotate_cadd is True
+
+    def test_pipeline_default_annotation_config_is_stub(self):
+        from src.data.real_data_prep import DataPrepPipeline
+        pipeline = DataPrepPipeline()
+        assert pipeline.annotation_config.dbnsfp_path   is None
+        assert pipeline.annotation_config.annotate_cadd is False

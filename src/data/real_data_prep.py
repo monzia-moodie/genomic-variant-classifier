@@ -38,6 +38,11 @@ from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import compute_class_weight
 
+from src.data.dbnsfp   import DbNSFPConnector
+from src.data.phylop   import PhyloPConnector
+from src.data.cadd     import CADDConnector
+from src.data.spliceai import SpliceAIConnector
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -114,6 +119,31 @@ class DataPrepConfig:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
 
+
+
+@dataclass
+class AnnotationConfig:
+    """
+    Paths and flags controlling which score connectors run during DataPrepPipeline.
+
+    All paths default to None -> connector runs in stub mode (returns default
+    scores, logs a WARNING, pipeline continues).  Set paths to activate real
+    annotation.
+
+    Sequence when run:
+      1. DbNSFPConnector(dbnsfp_path)     -- 6 scores for missense SNVs
+      2. PhyloPConnector(phylop_path)     -- phylop_score for all positions
+      3. CADDConnector()                  -- cadd_phred via REST (if annotate_cadd=True)
+      4. SpliceAIConnector(spliceai_path) -- splice_ai_score (PHASE_2_FEATURES)
+
+    annotate_cadd is False by default because the CADD REST API requires
+    1.5 s/variant. Enable only for small batches or when the pre-computed
+    file is available (PHASE_2_PLACEHOLDER).
+    """
+    dbnsfp_path:   Optional[Path] = None
+    phylop_path:   Optional[Path] = None
+    spliceai_path: Optional[Path] = None
+    annotate_cadd: bool           = False
 # ---------------------------------------------------------------------------
 # Core pipeline
 # ---------------------------------------------------------------------------
@@ -123,9 +153,10 @@ class DataPrepPipeline:
     from the canonical parquet format produced by database_connectors.py.
     """
 
-    def __init__(self, config: Optional[DataPrepConfig] = None) -> None:
-        self.config = config or DataPrepConfig()
-        self.scaler = StandardScaler()
+    def __init__(self, config: Optional[DataPrepConfig] = None, annotation_config: Optional[AnnotationConfig] = None) -> None:
+        self.config            = config or DataPrepConfig()
+        self.annotation_config = annotation_config or AnnotationConfig()
+        self.scaler            = StandardScaler()
 
     def run(
         self,
@@ -153,6 +184,11 @@ class DataPrepPipeline:
             df = self._join_gnomad(df, gnomad_path)
         if uniprot_path:
             df = self._join_uniprot(df, uniprot_path)
+
+        # Score annotation (Phase 2 connectors)
+        logger.info("=== Score annotation: starting ===")
+        df = self._annotate_scores(df)
+        logger.info("=== Score annotation: complete ===")
 
         X      = self._engineer_features(df)
         y      = df["label"].reset_index(drop=True)
@@ -273,6 +309,60 @@ class DataPrepPipeline:
         return df
 
     # ── Stage 4: Feature engineering ──────────────────────────────────────
+
+    def _annotate_scores(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Annotate df with pre-computed pathogenicity and conservation scores.
+
+        Sequence:
+          1. DbNSFPConnector   -- 6 scores for missense SNVs in dbNSFP
+          2. PhyloPConnector   -- overwrites phylop_score for all positions
+          3. CADDConnector     -- cadd_phred via REST (skipped by default)
+          4. SpliceAIConnector -- splice_ai_score (PHASE_2_FEATURES)
+
+        All connectors run in stub mode when their file is absent.
+        """
+        ac = self.annotation_config
+
+        # 1. dbNSFP: SIFT, PP2, REVEL, CADD, PhyloP, GERP for missense SNVs
+        dbnsfp = DbNSFPConnector(dbnsfp_file=ac.dbnsfp_path)
+        df = dbnsfp.annotate_dataframe(df)
+        logger.info(
+            "Score annotation 1/4 (DbNSFP): %d variants with real SIFT scores.",
+            (df.get("sift_score", pd.Series([0.5] * len(df), index=df.index)) != 0.5).sum(),
+        )
+
+        # 2. PhyloP: conservation for non-missense positions
+        phylop = PhyloPConnector(phylop_file=ac.phylop_path)
+        df = phylop.annotate_dataframe(df)
+        logger.info(
+            "Score annotation 2/4 (PhyloP): %d variants with non-zero phylop_score.",
+            (df.get("phylop_score", pd.Series([0.0] * len(df), index=df.index)) != 0.0).sum(),
+        )
+
+        # 3. CADD REST API (optional, off by default)
+        if ac.annotate_cadd:
+            cadd = CADDConnector()
+            df = cadd.fetch(variant_df=df)
+            logger.info(
+                "Score annotation 3/4 (CADD): %d variants with non-median cadd_phred.",
+                (df.get("cadd_phred", pd.Series([15.0] * len(df), index=df.index)) != 15.0).sum(),
+            )
+        else:
+            logger.debug(
+                "Score annotation 3/4 skipped (CADD disabled; "
+                "set annotate_cadd=True to enable)."
+            )
+
+        # 4. SpliceAI: splice disruption scores (PHASE_2_FEATURES)
+        spliceai = SpliceAIConnector(vcf_path=ac.spliceai_path)
+        df = spliceai.fetch(variant_df=df)
+        logger.info(
+            "Score annotation 4/4 (SpliceAI): %d variants with splice_ai_score > 0.",
+            (df.get("splice_ai_score", pd.Series([0.0] * len(df), index=df.index)) > 0).sum(),
+        )
+
+        return df
 
     def _engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
         feats = pd.DataFrame(index=df.index)
@@ -477,3 +567,8 @@ def enrich_gene_counts(df: pd.DataFrame) -> pd.DataFrame:
     df = df.merge(gene_path_counts, on="gene_symbol", how="left")
     df["n_pathogenic_in_gene"] = df["n_pathogenic_in_gene"].fillna(0).astype(int)
     return df
+
+
+
+
+
