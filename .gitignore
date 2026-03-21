@@ -75,7 +75,7 @@ data/synthetic/
 *.pkl
 
 # ── Model checkpoints ─────────────────────────────────────────────
-models/
+/models/
 *.pt
 *.pth
 
