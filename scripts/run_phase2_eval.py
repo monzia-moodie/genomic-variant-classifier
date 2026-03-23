@@ -104,18 +104,19 @@ def main() -> int:
             ),
             annotation_config=ann,
         )
-        X_train, X_test, y_train, y_test, meta = prep.run(
+        X_train, X_test, X_val, y_train, y_test, y_val, meta = prep.run(
             clinvar_path=str(clinvar),
             gnomad_path=args.gnomad,
         )
         logger.info(
-            "Data prep: train=%d test=%d features=%d",
-            len(X_train), len(X_test), X_train.shape[1],
+            "Data prep: train=%d val=%d test=%d features=%d",
+            len(X_train), len(X_val), len(X_test), X_train.shape[1],
         )
 
         _poly_a = "A" * 101
-        seq_tr = pd.Series([_poly_a] * len(y_train))
-        seq_te = pd.Series([_poly_a] * len(y_test))
+        seq_tr  = pd.Series([_poly_a] * len(y_train))
+        seq_te  = pd.Series([_poly_a] * len(y_test))
+        seq_val = pd.Series([_poly_a] * len(y_val))
 
         if args.max_train and len(y_train) > args.max_train:
             idx = pd.Series(range(len(y_train))).sample(
@@ -136,9 +137,11 @@ def main() -> int:
             logger.info("SVM skipped: training set %d > 100K (O(n²) infeasible)", len(y_train))
 
         ensemble.fit(X_train, seq_tr, y_train)
-        results = ensemble.evaluate(X_test, seq_te, y_test)
+        results     = ensemble.evaluate(X_test, seq_te, y_test)
+        val_results = ensemble.evaluate(X_val,  seq_val, y_val)
 
-        ens_row = results.loc["ENSEMBLE_STACKER"]
+        ens_row     = results.loc["ENSEMBLE_STACKER"]
+        ens_val_row = val_results.loc["ENSEMBLE_STACKER"]
         elapsed = time.perf_counter() - t0
         m = {
             "auroc":           float(ens_row["auroc"]),
@@ -146,40 +149,49 @@ def main() -> int:
             "f1":              float(ens_row["f1_macro"]),
             "mcc":             float(ens_row["mcc"]),
             "brier":           float(ens_row["brier"]),
+            "val_auroc":       float(ens_val_row["auroc"]),
+            "val_auprc":       float(ens_val_row["auprc"]),
+            "val_f1":          float(ens_val_row["f1_macro"]),
+            "val_mcc":         float(ens_val_row["mcc"]),
+            "val_brier":       float(ens_val_row["brier"]),
             "elapsed_seconds": elapsed,
             "n_train":         int(len(y_train)),
+            "n_val":           int(len(y_val)),
             "n_test":          int(len(y_test)),
             "n_features":      int(X_train.shape[1]),
         }
 
         (outdir / "metrics.json").write_text(json.dumps(m, indent=2))
         results.to_csv(outdir / "per_model_metrics.csv")
+        val_results.to_csv(outdir / "per_model_metrics_val.csv")
         X_test.to_parquet(outdir / "X_test.parquet",    index=False)
         meta.to_parquet(outdir / "meta_test.parquet",   index=False)
         _save_feature_importance(ensemble, list(X_train.columns), outdir)
 
-        auroc  = m["auroc"]
-        target = args.auroc_target
-        sep    = "-" * 52
+        auroc     = m["auroc"]
+        val_auroc = m["val_auroc"]
+        target    = args.auroc_target
+        sep       = "-" * 52
         print(f"\n{sep}\n  Phase 2 Evaluation\n{sep}")
-        print(f"  AUROC  : {auroc:.4f}  {'PASS' if auroc >= target else 'FAIL'}  (target >= {target})")
-        print(f"  AUPRC  : {m['auprc']:.4f}")
-        print(f"  Brier  : {m['brier']:.4f}")
-        print(f"  F1     : {m['f1']:.4f}")
-        print(f"  MCC    : {m['mcc']:.4f}")
-        print(f"  Train  : {m['n_train']:,} | Test: {m['n_test']:,} | Features: {m['n_features']}")
-        print(f"  Time   : {elapsed:.0f}s\n{sep}")
+        print(f"  {'':8s}  {'Dev (test)':>12s}  {'Holdout (val)':>13s}")
+        print(f"  {'AUROC':8s}  {auroc:>12.4f}  {val_auroc:>13.4f}  {'PASS' if val_auroc >= target else 'FAIL'}  (target >= {target})")
+        print(f"  {'AUPRC':8s}  {m['auprc']:>12.4f}  {m['val_auprc']:>13.4f}")
+        print(f"  {'Brier':8s}  {m['brier']:>12.4f}  {m['val_brier']:>13.4f}")
+        print(f"  {'F1':8s}  {m['f1']:>12.4f}  {m['val_f1']:>13.4f}")
+        print(f"  {'MCC':8s}  {m['mcc']:>12.4f}  {m['val_mcc']:>13.4f}")
+        print(f"  Train: {m['n_train']:,} | Val: {m['n_val']:,} | Test: {m['n_test']:,} | Features: {m['n_features']}")
+        print(f"  Time : {elapsed:.0f}s\n{sep}")
 
-        if auroc >= target:
-            print("\n  AUROC target met. Next: REST API + Docker deployment.\n")
+        if val_auroc >= target:
+            print("\n  Holdout AUROC target met. Next: REST API + Docker deployment.\n")
         else:
-            print(f"\n  AUROC below target by {target - auroc:.4f}. Check:")
+            print(f"\n  Holdout AUROC below target by {target - val_auroc:.4f}. Check:")
             print("    1. --alphamissense path set? (adds signal for missense variants)")
             print("    2. --gnomad path set? (allele_freq is typically top feature)")
             print("    3. Review feature_importance.csv")
             print("    4. Try --min-review-tier 2 for expert-reviewed labels only\n")
 
-        return 0 if auroc >= target else 1
+        return 0 if val_auroc >= target else 1
 
     except Exception as exc:
         logger.exception("Pipeline failed: %s", exc)
