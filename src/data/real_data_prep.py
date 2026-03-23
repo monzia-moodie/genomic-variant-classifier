@@ -108,6 +108,7 @@ class DataPrepConfig:
     exclude_conflicting:  bool  = True
     require_both_classes: bool  = True
     test_fraction:        float = 0.20
+    val_fraction:         float = 0.10    # held-out validation set (of full data)
     random_state:         int   = 42
     group_column:         str   = "gene_symbol"
     class_weight_strategy: str  = "balanced"
@@ -166,14 +167,19 @@ class DataPrepPipeline:
         clinvar_path: str,
         gnomad_path:  Optional[str] = None,
         uniprot_path: Optional[str] = None,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame]:
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series, pd.DataFrame]:
         """
-        Full pipeline from raw parquet to train/test splits.
+        Full pipeline from raw parquet to train/val/test splits.
 
         Returns:
-            X_train, X_test  — feature DataFrames
-            y_train, y_test  — binary labels (1=pathogenic, 0=benign)
-            meta_test        — original rows for test set (for reporting)
+            X_train, X_test, X_val  — feature DataFrames
+            y_train, y_test, y_val  — binary labels (1=pathogenic, 0=benign)
+            meta_test               — original rows for test set (for reporting)
+
+        Split fractions (gene-aware, no gene straddles splits):
+            train : 1 - test_fraction - val_fraction  (~70%)
+            val   : val_fraction                       (~10%)  ← clean holdout
+            test  : test_fraction                      (~20%)  ← dev/tuning set
         """
         logger.info("=== DataPrepPipeline: starting ===")
 
@@ -208,20 +214,20 @@ class DataPrepPipeline:
                     "Lower min_review_tier or increase dataset size."
                 )
 
-        X_train, X_test, y_train, y_test, train_idx, test_idx = (
+        X_train, X_test, X_val, y_train, y_test, y_val, train_idx, test_idx, val_idx = (
             self._gene_aware_split(X, y, groups)
         )
 
         meta_test = df.iloc[test_idx].reset_index(drop=True)
 
         if self.config.scale_features:
-            X_train, X_test = self._scale(X_train, X_test)
+            X_train, X_test, X_val = self._scale(X_train, X_test, X_val)
 
-        self._save_splits(X_train, X_test, y_train, y_test, meta_test)
-        self._report_split_stats(y_train, y_test, groups, train_idx, test_idx)
+        self._save_splits(X_train, X_test, X_val, y_train, y_test, y_val, meta_test)
+        self._report_split_stats(y_train, y_test, y_val, groups, train_idx, test_idx, val_idx)
 
         logger.info("=== DataPrepPipeline: complete ===")
-        return X_train, X_test, y_train, y_test, meta_test
+        return X_train, X_test, X_val, y_train, y_test, y_val, meta_test
 
     # ── Stage 1: Load and label ────────────────────────────────────────────
 
@@ -266,28 +272,44 @@ class DataPrepPipeline:
     # ── Stage 2: Enrich with gnomAD AFs ───────────────────────────────────
 
     def _join_gnomad(self, df: pd.DataFrame, gnomad_path: str) -> pd.DataFrame:
-        gnomad = pd.read_parquet(gnomad_path)[["variant_id", "allele_freq"]].copy()
-        gnomad = gnomad.rename(columns={"allele_freq": "gnomad_af"})
-        gnomad = gnomad.dropna(subset=["variant_id"]).drop_duplicates("variant_id")
+        gnomad = pd.read_parquet(gnomad_path, columns=["variant_id", "allele_freq"]).copy()
 
-        def extract_locus(vid: str) -> str:
-            parts = str(vid).split(":", 1)
-            return parts[1] if len(parts) > 1 else vid
+        # Build (chrom, pos, ref, alt) join keys from variant_id
+        # Handles both "gnomad:1:69134:A:G" and "1:69134:A:G" formats
+        def _parse_locus(vid: str) -> tuple[str, str, str, str] | None:
+            parts = str(vid).split(":")
+            # strip source prefix if present (non-numeric first part)
+            if not parts[0].replace("X","").replace("Y","").replace("M","").isdigit():
+                parts = parts[1:]
+            if len(parts) < 4:
+                return None
+            return parts[0], parts[1], parts[2], parts[3]
 
-        df["_locus"]     = df["variant_id"].apply(extract_locus)
-        gnomad["_locus"] = gnomad["variant_id"].apply(extract_locus)
-
-        df = df.merge(gnomad[["_locus", "gnomad_af"]], on="_locus", how="left").drop(columns=["_locus"])
-
-        if "allele_freq" in df.columns:
-            df["allele_freq"] = df["allele_freq"].fillna(df.get("gnomad_af", np.nan))
-        else:
-            df["allele_freq"] = df.get("gnomad_af", np.nan)
-
-        logger.info(
-            "After gnomAD join: %d variants have AF.",
-            int(df["allele_freq"].notna().sum()),
+        gnomad[["_chrom","_pos","_ref","_alt"]] = pd.DataFrame(
+            gnomad["variant_id"].map(_parse_locus).tolist(),
+            index=gnomad.index,
         )
+        gnomad = (gnomad.dropna(subset=["_chrom"])
+                        .drop_duplicates(subset=["_chrom","_pos","_ref","_alt"])
+                        [["_chrom","_pos","_ref","_alt","allele_freq"]]
+                        .rename(columns={"allele_freq": "gnomad_af"}))
+
+        # Build matching keys on ClinVar side
+        df["_chrom"] = df["chrom"].astype(str)
+        df["_pos"]   = df["pos"].astype(str)
+        df["_ref"]   = df["ref"].astype(str)
+        df["_alt"]   = df["alt"].astype(str)
+
+        df = df.merge(gnomad, on=["_chrom","_pos","_ref","_alt"], how="left")
+        df = df.drop(columns=["_chrom","_pos","_ref","_alt"])
+
+        df["allele_freq"] = df["allele_freq"].fillna(df.get("gnomad_af", float("nan")))
+        if "gnomad_af" in df.columns:
+            df = df.drop(columns=["gnomad_af"])
+
+        n_matched = df["allele_freq"].notna().sum()
+        logger.info("After gnomAD join: %d / %d variants have AF (%.1f%%).",
+                    n_matched, len(df), n_matched / len(df) * 100)
         return df
 
     # ── Stage 3: Enrich with UniProt protein features ─────────────────────
@@ -520,23 +542,48 @@ class DataPrepPipeline:
         groups: pd.Series,
     ) -> tuple:
         """
-        Split so all variants of a gene land in the same fold.
-        Prevents models from memorizing gene-level patterns.
+        Gene-aware three-way split: train / val / test.
+        All variants of a gene land in the same split — no leakage.
+
+        Step 1: carve test from full data at test_fraction.
+        Step 2: carve val from remaining data.
+                val_fraction is expressed as fraction of the full dataset,
+                so the effective fraction of the remaining pool is
+                val_fraction / (1 - test_fraction).
         """
+        # Step 1: test split
         splitter = GroupShuffleSplit(
             n_splits=1,
             test_size=self.config.test_fraction,
             random_state=self.config.random_state,
         )
-        train_idx, test_idx = next(splitter.split(X, y, groups=groups))
+        trainval_idx, test_idx = next(splitter.split(X, y, groups=groups))
+
+        # Step 2: val split from the train+val pool
+        val_size_of_pool = self.config.val_fraction / (1.0 - self.config.test_fraction)
+        val_splitter = GroupShuffleSplit(
+            n_splits=1,
+            test_size=val_size_of_pool,
+            random_state=self.config.random_state + 1,
+        )
+        X_pool      = X.iloc[trainval_idx]
+        y_pool      = y.iloc[trainval_idx]
+        groups_pool = groups.iloc[trainval_idx]
+        rel_train_idx, rel_val_idx = next(val_splitter.split(X_pool, y_pool, groups=groups_pool))
+
+        # Map back to absolute indices
+        train_idx = trainval_idx[rel_train_idx]
+        val_idx   = trainval_idx[rel_val_idx]
 
         X_train = X.iloc[train_idx].reset_index(drop=True)
         X_test  = X.iloc[test_idx].reset_index(drop=True)
+        X_val   = X.iloc[val_idx].reset_index(drop=True)
         y_train = y.iloc[train_idx].reset_index(drop=True)
         y_test  = y.iloc[test_idx].reset_index(drop=True)
+        y_val   = y.iloc[val_idx].reset_index(drop=True)
 
         if self.config.require_both_classes:
-            for split_name, y_split in [("train", y_train), ("test", y_test)]:
+            for split_name, y_split in [("train", y_train), ("val", y_val), ("test", y_test)]:
                 classes = set(y_split.unique())
                 if classes != {0, 1}:
                     raise ValueError(
@@ -544,31 +591,34 @@ class DataPrepPipeline:
                         "Try lowering min_review_tier or increasing dataset size."
                     )
 
-        return X_train, X_test, y_train, y_test, train_idx, test_idx
+        return X_train, X_test, X_val, y_train, y_test, y_val, train_idx, test_idx, val_idx
 
     # ── Stage 6: Scaling ───────────────────────────────────────────────────
 
     def _scale(
-        self, X_train: pd.DataFrame, X_test: pd.DataFrame
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        self, X_train: pd.DataFrame, X_test: pd.DataFrame, X_val: pd.DataFrame
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         cols = X_train.columns
-        X_train_scaled = pd.DataFrame(self.scaler.fit_transform(X_train),  columns=cols)
-        X_test_scaled  = pd.DataFrame(self.scaler.transform(X_test),       columns=cols)
-        return X_train_scaled, X_test_scaled
+        X_train_scaled = pd.DataFrame(self.scaler.fit_transform(X_train), columns=cols)
+        X_test_scaled  = pd.DataFrame(self.scaler.transform(X_test),      columns=cols)
+        X_val_scaled   = pd.DataFrame(self.scaler.transform(X_val),       columns=cols)
+        return X_train_scaled, X_test_scaled, X_val_scaled
 
     # ── Stage 7: Save ──────────────────────────────────────────────────────
 
     def _save_splits(
         self,
-        X_train: pd.DataFrame, X_test: pd.DataFrame,
-        y_train: pd.Series,    y_test: pd.Series,
+        X_train: pd.DataFrame, X_test: pd.DataFrame, X_val: pd.DataFrame,
+        y_train: pd.Series,    y_test: pd.Series,    y_val: pd.Series,
         meta_test: pd.DataFrame,
     ) -> None:
         out = self.config.output_dir
         X_train.to_parquet(out / "X_train.parquet",   index=False)
         X_test.to_parquet(out  / "X_test.parquet",    index=False)
+        X_val.to_parquet(out   / "X_val.parquet",     index=False)
         y_train.to_frame("label").to_parquet(out / "y_train.parquet", index=False)
         y_test.to_frame("label").to_parquet(out  / "y_test.parquet",  index=False)
+        y_val.to_frame("label").to_parquet(out   / "y_val.parquet",   index=False)
         meta_test.to_parquet(out / "meta_test.parquet", index=False)
         logger.info("Splits saved to %s/", out)
 
@@ -576,18 +626,23 @@ class DataPrepPipeline:
 
     def _report_split_stats(
         self,
-        y_train: pd.Series, y_test: pd.Series,
+        y_train: pd.Series, y_test: pd.Series, y_val: pd.Series,
         groups:  pd.Series,
-        train_idx: np.ndarray, test_idx: np.ndarray,
+        train_idx: np.ndarray, test_idx: np.ndarray, val_idx: np.ndarray,
     ) -> None:
         train_genes = groups.iloc[train_idx].nunique()
         test_genes  = groups.iloc[test_idx].nunique()
+        val_genes   = groups.iloc[val_idx].nunique()
         logger.info("─" * 55)
         logger.info("%-12s %10s %12s %8s", "Split", "Variants", "Pathogenic", "Genes")
         logger.info("─" * 55)
         logger.info(
             "%-12s %10d %11d (%4.1f%%)  %8d",
             "Train", len(y_train), y_train.sum(), y_train.mean() * 100, train_genes,
+        )
+        logger.info(
+            "%-12s %10d %11d (%4.1f%%)  %8d",
+            "Val",   len(y_val),   y_val.sum(),   y_val.mean()   * 100, val_genes,
         )
         logger.info(
             "%-12s %10d %11d (%4.1f%%)  %8d",
