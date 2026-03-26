@@ -61,7 +61,7 @@ from fastapi.responses import JSONResponse
 from src.api.schemas import (
     BatchPredictRequest,
     BatchPredictResponse,
-    GeneLookupResponse,
+    GeneSummaryResponse,
     HealthResponse,
     InfoResponse,
     PredictResponse,
@@ -80,14 +80,14 @@ MODEL_PATH: Path = Path(os.environ.get("MODEL_PATH", "models/phase2_pipeline.job
 GNOMAD_INDEX_PATH: Optional[Path] = (
     Path(p) if (p := os.environ.get("GNOMAD_INDEX_PATH")) else None
 )
-GENE_COUNTS_PATH: Optional[Path] = Path(
-    os.environ.get("GENE_COUNTS_PATH", "data/processed/gene_pathogenic_counts.parquet")
+GENE_SUMMARY_PATH: Optional[Path] = Path(
+    os.environ.get("GENE_SUMMARY_PATH", "data/processed/gene_summary.parquet")
 )
 
 # Filled at startup
-_PIPELINE: Any = None                        # InferencePipeline instance
+_PIPELINE: Any = None                         # InferencePipeline instance
 _GNOMAD_INDEX: Optional[pd.DataFrame] = None
-_GENE_COUNTS: Optional[pd.Series] = None    # gene_symbol → n_pathogenic_in_gene
+_GENE_SUMMARY: Optional[pd.DataFrame] = None  # gene_symbol-indexed gene summary table
 _START_TIME: float = time.monotonic()
 
 # Model provenance — update after each training run
@@ -104,8 +104,8 @@ HOLDOUT_AUROC    = 0.9847   # gene-stratified, 154 K variants
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model, optional gnomAD index, and gene counts at startup."""
-    global _PIPELINE, _GNOMAD_INDEX, _GENE_COUNTS
+    """Load model, optional gnomAD index, and gene summary table at startup."""
+    global _PIPELINE, _GNOMAD_INDEX, _GENE_SUMMARY
 
     # --- Load inference pipeline ---
     if MODEL_PATH.exists():
@@ -134,19 +134,18 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("Could not load gnomAD index: %s", exc)
 
-    # --- Load gene pathogenic counts (optional, but strongly recommended) ---
-    if GENE_COUNTS_PATH and GENE_COUNTS_PATH.exists():
+    # --- Load gene summary table (strongly recommended) ---------------------
+    if GENE_SUMMARY_PATH and GENE_SUMMARY_PATH.exists():
         try:
-            _df = pd.read_parquet(GENE_COUNTS_PATH)
-            _GENE_COUNTS = _df.set_index("gene_symbol")["n_pathogenic_in_gene"]
-            logger.info("Loaded gene counts: %d genes", len(_GENE_COUNTS))
+            _GENE_SUMMARY = pd.read_parquet(GENE_SUMMARY_PATH).set_index("gene_symbol")
+            logger.info("Loaded gene summary: %d genes", len(_GENE_SUMMARY))
         except Exception as exc:
-            logger.warning("Could not load gene counts: %s", exc)
+            logger.warning("Could not load gene summary: %s", exc)
     else:
         logger.warning(
-            "GENE_COUNTS_PATH %s not found — n_pathogenic_in_gene will default to 0 "
-            "when callers omit it.  Run: python -c \"...\" to build the table.",
-            GENE_COUNTS_PATH,
+            "GENE_SUMMARY_PATH %s not found — gene features will use defaults "
+            "when callers omit them.  Build with scripts/build_gene_summary.py.",
+            GENE_SUMMARY_PATH,
         )
 
     yield  # app is running
@@ -183,11 +182,11 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 def _lookup_gene_count(gene_symbol: str) -> Optional[int]:
-    """Return ClinVar pathogenic variant count for a gene, or None if unknown."""
-    if _GENE_COUNTS is None or not gene_symbol:
+    """Return ClinVar pathogenic variant count for a gene, or None if table not loaded."""
+    if _GENE_SUMMARY is None or not gene_symbol:
         return None
     try:
-        return int(_GENE_COUNTS.loc[gene_symbol])
+        return int(_GENE_SUMMARY.loc[gene_symbol, "n_pathogenic_in_gene"])
     except KeyError:
         return 0   # gene not in ClinVar — treat as no known pathogenic variants
 
@@ -279,7 +278,7 @@ async def health() -> HealthResponse:
         status              = "ok" if _PIPELINE is not None else "degraded",
         model_loaded        = _PIPELINE is not None,
         gnomad_index_loaded = _GNOMAD_INDEX is not None,
-        gene_counts_loaded  = _GENE_COUNTS is not None,
+        gene_counts_loaded  = _GENE_SUMMARY is not None,
         uptime_seconds      = round(time.monotonic() - _START_TIME, 1),
     )
 
@@ -396,26 +395,41 @@ async def batch_predict(request: BatchPredictRequest) -> BatchPredictResponse:
 
 
 @app.get(
-    "/genes/{gene_symbol}",
-    response_model=GeneLookupResponse,
-    summary="ClinVar pathogenic variant count for a gene",
+    "/gene/{gene_symbol}",
+    response_model=GeneSummaryResponse,
+    summary="Gene-level features for request enrichment (n_pathogenic_in_gene, gene_constraint_oe, has_uniprot_annotation)",
     tags=["reference"],
 )
-async def gene_lookup(gene_symbol: str) -> GeneLookupResponse:
-    if _GENE_COUNTS is None:
+async def gene_summary(gene_symbol: str) -> GeneSummaryResponse:
+    """
+    Return the three gene-level features used by the model for a given HGNC symbol.
+
+    Callers can use this to auto-enrich /predict or /batch requests rather than
+    looking up counts themselves.  gene_constraint_oe is null when gnomAD
+    constraint data has not been loaded; engineer_features() will default to 1.0.
+    """
+    if _GENE_SUMMARY is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gene counts table not loaded.  Check GENE_COUNTS_PATH.",
+            detail="Gene summary table not loaded.  Check GENE_SUMMARY_PATH.",
         )
-    count = _lookup_gene_count(gene_symbol)
-    if count is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gene counts table not loaded.",
+    try:
+        row = _GENE_SUMMARY.loc[gene_symbol]
+    except KeyError:
+        # Unknown gene — return zeros (conservative defaults)
+        return GeneSummaryResponse(
+            gene_symbol          = gene_symbol,
+            n_pathogenic_in_gene = 0,
+            gene_constraint_oe   = None,
+            has_uniprot_annotation = 0,
         )
-    return GeneLookupResponse(
-        gene_symbol          = gene_symbol,
-        n_pathogenic_in_gene = count,
+
+    oe = row["gene_constraint_oe"]
+    return GeneSummaryResponse(
+        gene_symbol            = gene_symbol,
+        n_pathogenic_in_gene   = int(row["n_pathogenic_in_gene"]),
+        gene_constraint_oe     = None if pd.isna(oe) else float(oe),
+        has_uniprot_annotation = int(row["has_uniprot_annotation"]),
     )
 
 

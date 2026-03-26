@@ -209,9 +209,20 @@ class HealthResponse(BaseModel):
     uptime_seconds: float
 
 
-class GeneLookupResponse(BaseModel):
+class GeneSummaryResponse(BaseModel):
     gene_symbol: str
     n_pathogenic_in_gene: int
+    gene_constraint_oe: Optional[float] = Field(
+        default=None,
+        description=(
+            "gnomAD pLoF observed/expected ratio.  None = not available; "
+            "engineer_features() defaults to 1.0 (unconstrained) when absent."
+        ),
+    )
+    has_uniprot_annotation: int = Field(
+        default=0,
+        description="1 if the gene has any UniProt functional annotation.",
+    )
     source: str = "ClinVar (training set)"
 
 

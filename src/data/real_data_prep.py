@@ -167,14 +167,16 @@ class DataPrepPipeline:
         clinvar_path: str,
         gnomad_path:  Optional[str] = None,
         uniprot_path: Optional[str] = None,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series, pd.DataFrame]:
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame,
+               pd.Series,    pd.Series,    pd.Series,
+               pd.DataFrame, pd.DataFrame]:
         """
         Full pipeline from raw parquet to train/val/test splits.
 
         Returns:
-            X_train, X_test, X_val  — feature DataFrames
-            y_train, y_test, y_val  — binary labels (1=pathogenic, 0=benign)
-            meta_test               — original rows for test set (for reporting)
+            X_train, X_val, X_test   — feature DataFrames
+            y_train, y_val, y_test   — binary labels (1=pathogenic, 0=benign)
+            meta_val, meta_test      — original rows for val/test sets
 
         Split fractions (gene-aware, no gene straddles splits):
             train : 1 - test_fraction - val_fraction  (~70%)
@@ -218,16 +220,17 @@ class DataPrepPipeline:
             self._gene_aware_split(X, y, groups)
         )
 
+        meta_val  = df.iloc[val_idx].reset_index(drop=True)
         meta_test = df.iloc[test_idx].reset_index(drop=True)
 
         if self.config.scale_features:
             X_train, X_test, X_val = self._scale(X_train, X_test, X_val)
 
-        self._save_splits(X_train, X_test, X_val, y_train, y_test, y_val, meta_test)
+        self._save_splits(X_train, X_val, X_test, y_train, y_val, y_test, meta_val, meta_test)
         self._report_split_stats(y_train, y_test, y_val, groups, train_idx, test_idx, val_idx)
 
         logger.info("=== DataPrepPipeline: complete ===")
-        return X_train, X_test, X_val, y_train, y_test, y_val, meta_test
+        return X_train, X_val, X_test, y_train, y_val, y_test, meta_val, meta_test
 
     # ── Stage 1: Load and label ────────────────────────────────────────────
 
@@ -608,18 +611,19 @@ class DataPrepPipeline:
 
     def _save_splits(
         self,
-        X_train: pd.DataFrame, X_test: pd.DataFrame, X_val: pd.DataFrame,
-        y_train: pd.Series,    y_test: pd.Series,    y_val: pd.Series,
-        meta_test: pd.DataFrame,
+        X_train: pd.DataFrame, X_val: pd.DataFrame,  X_test: pd.DataFrame,
+        y_train: pd.Series,    y_val: pd.Series,     y_test: pd.Series,
+        meta_val: pd.DataFrame, meta_test: pd.DataFrame,
     ) -> None:
         out = self.config.output_dir
-        X_train.to_parquet(out / "X_train.parquet",   index=False)
-        X_test.to_parquet(out  / "X_test.parquet",    index=False)
-        X_val.to_parquet(out   / "X_val.parquet",     index=False)
-        y_train.to_frame("label").to_parquet(out / "y_train.parquet", index=False)
-        y_test.to_frame("label").to_parquet(out  / "y_test.parquet",  index=False)
-        y_val.to_frame("label").to_parquet(out   / "y_val.parquet",   index=False)
-        meta_test.to_parquet(out / "meta_test.parquet", index=False)
+        X_train.to_parquet(out / "X_train.parquet",       index=False)
+        X_val.to_parquet(out   / "X_val.parquet",         index=False)
+        X_test.to_parquet(out  / "X_test.parquet",        index=False)
+        y_train.to_frame("label").to_parquet(out / "y_train.parquet",    index=False)
+        y_val.to_frame("label").to_parquet(out   / "y_val.parquet",      index=False)
+        y_test.to_frame("label").to_parquet(out  / "y_test.parquet",     index=False)
+        meta_val.to_parquet(out  / "meta_val.parquet",    index=False)
+        meta_test.to_parquet(out / "meta_test.parquet",   index=False)
         logger.info("Splits saved to %s/", out)
 
     # ── Utilities ──────────────────────────────────────────────────────────

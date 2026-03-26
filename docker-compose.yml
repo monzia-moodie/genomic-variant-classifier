@@ -48,14 +48,14 @@ services:
       - "8000:8000"
     environment:
       MODEL_PATH:         /app/models/phase2_pipeline.joblib
-      GENE_COUNTS_PATH:   /app/data/processed/gene_pathogenic_counts.parquet
+      GENE_SUMMARY_PATH:  /app/data/processed/gene_summary.parquet
       # Uncomment to enable live gnomAD AF lookup (large file — 8 GB memory):
       # GNOMAD_INDEX_PATH: /app/data/processed/gnomad_v4_exomes.parquet
       LOG_LEVEL:          INFO
       WORKERS:            "2"
     volumes:
       - ./models:/app/models:ro
-      - ./data/processed/gene_pathogenic_counts.parquet:/app/data/processed/gene_pathogenic_counts.parquet:ro
+      - ./data/processed/gene_summary.parquet:/app/data/processed/gene_summary.parquet:ro
       # Mount source for local development hot-reload (remove in production):
       # - ./src:/app/src:ro
     healthcheck:

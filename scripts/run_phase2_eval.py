@@ -104,7 +104,7 @@ def main() -> int:
             ),
             annotation_config=ann,
         )
-        X_train, X_test, X_val, y_train, y_test, y_val, meta = prep.run(
+        X_train, X_val, X_test, y_train, y_val, y_test, meta_val, meta = prep.run(
             clinvar_path=str(clinvar),
             gnomad_path=args.gnomad,
         )
@@ -137,6 +137,12 @@ def main() -> int:
             logger.info("SVM skipped: training set %d > 100K (O(n²) infeasible)", len(y_train))
 
         ensemble.fit(X_train, seq_tr, y_train)
+        ensemble.save(outdir / "models" / "ensemble.joblib")
+
+        import joblib
+        joblib.dump(prep.scaler, outdir / "scaler.joblib")
+        logger.info("Scaler saved to %s/scaler.joblib", outdir)
+
         results     = ensemble.evaluate(X_test, seq_te, y_test)
         val_results = ensemble.evaluate(X_val,  seq_val, y_val)
 
@@ -164,8 +170,9 @@ def main() -> int:
         (outdir / "metrics.json").write_text(json.dumps(m, indent=2))
         results.to_csv(outdir / "per_model_metrics.csv")
         val_results.to_csv(outdir / "per_model_metrics_val.csv")
-        X_test.to_parquet(outdir / "X_test.parquet",    index=False)
-        meta.to_parquet(outdir / "meta_test.parquet",   index=False)
+        X_test.to_parquet(outdir / "X_test.parquet",      index=False)
+        meta.to_parquet(outdir / "meta_test.parquet",    index=False)
+        meta_val.to_parquet(outdir / "meta_val.parquet", index=False)
         _save_feature_importance(ensemble, list(X_train.columns), outdir)
 
         auroc     = m["auroc"]
