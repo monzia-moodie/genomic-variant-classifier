@@ -49,6 +49,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--spliceai",        default=None)
     p.add_argument("--alphamissense",   default=None)
     p.add_argument("--gtex-genes",      nargs="*", default=[])
+    p.add_argument("--kg",              default=None,
+                   help="1000 Genomes Phase 3 AF parquet for gnomAD AF fallback")
+    p.add_argument("--string-db",       default=None,
+                   help="Enable GNN training. Value = STRING combined_score threshold "
+                        "(int, default 700) or 'auto'.  Requires torch + torch_geometric.")
     p.add_argument("--skip-nn",         action="store_true")
     p.add_argument("--skip-svm",        action="store_true",
                    help="Exclude SVM (RBF kernel is O(n²) — required at >100k samples)")
@@ -96,6 +101,7 @@ def main() -> int:
             spliceai_path=Path(args.spliceai) if args.spliceai else None,
             alphamissense_path=Path(args.alphamissense) if args.alphamissense else None,
             gtex_genes=args.gtex_genes or [],
+            kg_path=Path(args.kg) if args.kg else None,
         )
         prep = DataPrepPipeline(
             config=DataPrepConfig(
@@ -142,6 +148,84 @@ def main() -> int:
         import joblib
         joblib.dump(prep.scaler, outdir / "scaler.joblib")
         logger.info("Scaler saved to %s/scaler.joblib", outdir)
+
+        # ── Optional GNN training (5.2) ───────────────────────────────────
+        gnn_scorer = None
+        if args.string_db:
+            try:
+                from src.models.gnn import (
+                    GNNScorer, StringDBGraph, build_pyg_dataset,
+                    train_gnn_pipeline,
+                )
+                string_threshold = (
+                    700 if args.string_db == "auto"
+                    else int(args.string_db)
+                )
+                logger.info(
+                    "GNN training: STRING threshold=%d, epochs=100", string_threshold
+                )
+                # Use the 55 tabular feature columns as node features
+                node_feat_cols = [c for c in X_train.columns if c != "gnn_score"]
+
+                # Build a raw training DataFrame for the GNN (needs gene_symbol + label)
+                gnn_df = meta_val.iloc[:0].copy()   # schema reference
+                # Attach gene_symbol from the ClinVar training rows
+                # (meta_test has index aligned to test; we need train indices)
+                # The simplest approach: re-build from the split parquet files if present
+                split_train = outdir / "splits" / "X_train.parquet"
+                if split_train.exists():
+                    X_train_raw = pd.read_parquet(split_train)
+                    gnn_df = X_train_raw.copy()
+                    gnn_df["acmg_label"] = y_train.values
+                else:
+                    # Fallback: use X_train feature matrix (no gene_symbol → smaller GNN)
+                    gnn_df = X_train.copy()
+                    gnn_df["acmg_label"] = y_train.values
+
+                gnn_model, gnn_trainer, gnn_history = train_gnn_pipeline(
+                    variant_df=gnn_df,
+                    node_feature_cols=node_feat_cols,
+                    string_threshold=string_threshold,
+                    test_split=0.15,
+                    epochs=100,
+                    batch_size=32,
+                )
+                joblib.dump(gnn_model, outdir / "models" / "gnn_model.joblib")
+
+                # Build a GNNScorer for inference-time gene-level scoring
+                builder = StringDBGraph(combined_score_threshold=string_threshold)
+                graph = builder.build()
+                full_dataset = build_pyg_dataset(gnn_df, graph, node_feat_cols)
+                gnn_scorer = GNNScorer.from_trainer(gnn_trainer, full_dataset, gnn_df)
+                joblib.dump(gnn_scorer, outdir / "models" / "gnn_scorer.joblib")
+
+                # Overwrite gnn_score in feature matrices with real GNN predictions
+                for split_name, split_df, X_split in [
+                    ("train", gnn_df, X_train),
+                    ("val",   meta_val, X_val),
+                    ("test",  meta, X_test),
+                ]:
+                    if "gene_symbol" in split_df.columns:
+                        X_split["gnn_score"] = (
+                            split_df["gene_symbol"]
+                            .fillna("")
+                            .map(gnn_scorer.score)
+                            .values
+                        )
+                        logger.info(
+                            "GNN scores injected into %s split (mean=%.3f).",
+                            split_name,
+                            float(X_split["gnn_score"].mean()),
+                        )
+                logger.info("GNN training complete. Best val AUC: %.4f",
+                            max(h["val_auc"] for h in gnn_history))
+            except ImportError as exc:
+                logger.warning(
+                    "GNN skipped — missing dependency: %s.  "
+                    "Install with: pip install torch torch-geometric", exc
+                )
+            except Exception as exc:
+                logger.warning("GNN training failed: %s — continuing without GNN.", exc)
 
         results     = ensemble.evaluate(X_test, seq_te, y_test)
         val_results = ensemble.evaluate(X_val,  seq_val, y_val)

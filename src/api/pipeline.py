@@ -39,9 +39,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 INFERENCE_FEATURE_COLUMNS: list[str] = list(TABULAR_FEATURES)
-assert len(INFERENCE_FEATURE_COLUMNS) == 55, (
+assert len(INFERENCE_FEATURE_COLUMNS) == 56, (
     f"INFERENCE_FEATURE_COLUMNS has {len(INFERENCE_FEATURE_COLUMNS)} entries; "
-    "expected 55.  Update TABULAR_FEATURES in src/models/variant_ensemble.py."
+    "expected 56.  Update TABULAR_FEATURES in src/models/variant_ensemble.py."
 )
 
 
@@ -69,17 +69,21 @@ class InferencePipeline:
     Wraps fitted tabular base models + stacking meta-learner for deployment.
 
     At inference time the pipeline:
-      1. Calls engineer_features() to derive the 55 INFERENCE_FEATURE_COLUMNS
-      2. Applies the StandardScaler (if present)
-      3. Drives each base model with a numpy array → stacks predictions
-      4. Feeds the stack to the meta-learner
-      5. Returns a structured result dict with score, classification, and confidence
+      1. Optionally scores variants via GNNScorer → adds gnn_score column
+      2. Calls engineer_features() to derive the 56 INFERENCE_FEATURE_COLUMNS
+      3. Applies the StandardScaler (if present)
+      4. Drives each base model with a numpy array → stacks predictions
+      5. Feeds the stack to the meta-learner
+      6. Returns a structured result dict with score, classification, and confidence
 
     Sequence-based models (CNN) are excluded at export time — they require
     FASTA context that is not available at API inference time.
 
-    If no scaler is provided (scaler=None) step 2 is skipped — safe for
+    If no scaler is provided (scaler=None) step 3 is skipped — safe for
     tree-based-only ensembles where scaling has no effect.
+
+    If no gnn_scorer is provided (gnn_scorer=None) gnn_score defaults to 0.5
+    (ambiguous / not available) for all variants.
     """
 
     def __init__(
@@ -88,11 +92,13 @@ class InferencePipeline:
         meta_learner,
         scaler=None,
         metadata: Optional[PipelineMetadata] = None,
+        gnn_scorer=None,
     ) -> None:
         self.trained_models = trained_models
         self.meta_learner   = meta_learner
         self.scaler         = scaler
         self.metadata       = metadata or PipelineMetadata()
+        self.gnn_scorer     = gnn_scorer   # Optional GNNScorer instance
 
     # ------------------------------------------------------------------
     # Factory
@@ -175,8 +181,28 @@ class InferencePipeline:
         ----------
         df : pd.DataFrame
             Raw variant rows — same schema as predict_batch input dicts.
+            If gnn_scorer is set, gnn_score is computed automatically.
+            Otherwise gnn_score defaults to 0.5 (no GNN / ambiguous).
         """
-        X = engineer_features(df)
+        enriched = df.copy()
+
+        # --- Optional GNN scoring (adds gnn_score column) ---
+        if self.gnn_scorer is not None:
+            try:
+                gene_symbols = enriched.get(
+                    "gene_symbol",
+                    pd.Series([""] * len(enriched), index=enriched.index),
+                ).fillna("")
+                enriched["gnn_score"] = gene_symbols.map(
+                    lambda g: self.gnn_scorer.score(g)
+                )
+            except Exception as exc:
+                logger.warning(
+                    "GNNScorer failed (%s) — defaulting gnn_score to 0.5.", exc
+                )
+                enriched["gnn_score"] = 0.5
+
+        X = engineer_features(enriched)
         if self.scaler is not None:
             X = pd.DataFrame(
                 self.scaler.transform(X),

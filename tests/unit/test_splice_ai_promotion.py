@@ -2,16 +2,17 @@
 tests/unit/test_splice_ai_promotion.py
 =======================================
 Regression tests documenting the PROMOTION of splice_ai_score (and new Phase 4
-features) into TABULAR_FEATURES, and verifying the new 55-feature contract.
+features) into TABULAR_FEATURES, and verifying the new 56-feature contract.
 
 Key invariants tested:
   1.  splice_ai_score IS in TABULAR_FEATURES (promoted from PHASE_2_FEATURES)
   2.  PHASE_2_FEATURES is empty (all features promoted)
-  3.  TABULAR_FEATURES has exactly 55 entries
+  3.  TABULAR_FEATURES has exactly 56 entries (55 tabular + gnn_score)
   4.  engineer_features() output columns match TABULAR_FEATURES exactly
   5.  engineer_features() produces no NaN values
   6.  All 9 new Phase 4 features are present in TABULAR_FEATURES
-  7.  No module-level logging.basicConfig (Issue L compliance)
+  7.  gnn_score (Phase 5) is present in TABULAR_FEATURES
+  8.  No module-level logging.basicConfig (Issue L compliance)
 
 New features promoted in Phase 4:
   splice_ai_score, eve_score                              — functional scores
@@ -102,9 +103,9 @@ def test_phase_2_features_is_empty():
 # ---------------------------------------------------------------------------
 
 def test_tabular_features_length():
-    """TABULAR_FEATURES must have exactly 55 entries."""
-    assert len(TABULAR_FEATURES) == 55, (
-        f"Expected 55 TABULAR_FEATURES, got {len(TABULAR_FEATURES)}: {TABULAR_FEATURES}"
+    """TABULAR_FEATURES must have exactly 56 entries (55 tabular + gnn_score)."""
+    assert len(TABULAR_FEATURES) == 56, (
+        f"Expected 56 TABULAR_FEATURES, got {len(TABULAR_FEATURES)}: {TABULAR_FEATURES}"
     )
 
 
@@ -146,6 +147,34 @@ def test_new_features_in_tabular_features():
     assert not missing, (
         f"New Phase 4 features missing from TABULAR_FEATURES: {missing}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. gnn_score (Phase 5) present in TABULAR_FEATURES
+# ---------------------------------------------------------------------------
+
+def test_gnn_score_in_tabular_features():
+    """gnn_score must be the last entry in TABULAR_FEATURES."""
+    assert "gnn_score" in TABULAR_FEATURES
+    assert TABULAR_FEATURES[-1] == "gnn_score"
+
+
+def test_gnn_score_default_half_when_absent():
+    """gnn_score default must be 0.5 (ambiguous / GNN not run)."""
+    df = _minimal_df()
+    assert "gnn_score" not in df.columns
+    feats = engineer_features(df)
+    assert feats.loc[0, "gnn_score"] == pytest.approx(0.5)
+    assert not feats["gnn_score"].isnull().any()
+
+
+def test_gnn_score_clipped_to_unit_interval():
+    """engineer_features() must clip gnn_score to [0, 1]."""
+    import pandas as pd
+    df = _minimal_df()
+    df["gnn_score"] = 1.5   # out-of-range
+    feats = engineer_features(df)
+    assert feats.loc[0, "gnn_score"] == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

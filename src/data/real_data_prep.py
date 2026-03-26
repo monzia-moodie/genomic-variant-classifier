@@ -154,6 +154,7 @@ class AnnotationConfig:
     dbsnp_path:         Optional[Path] = None
     eve_path:           Optional[Path] = None
     hgmd_path:          Optional[Path] = None
+    kg_path:            Optional[Path] = None   # 1000 Genomes Phase 3 AF parquet
 # ---------------------------------------------------------------------------
 # Core pipeline
 # ---------------------------------------------------------------------------
@@ -199,7 +200,7 @@ class DataPrepPipeline:
         )
 
         if gnomad_path:
-            df = self._join_gnomad(df, gnomad_path)
+            df = self._join_gnomad(df, gnomad_path, kg_path=self.annotation_config.kg_path)
         if uniprot_path:
             df = self._join_uniprot(df, uniprot_path)
 
@@ -280,7 +281,12 @@ class DataPrepPipeline:
 
     # ── Stage 2: Enrich with gnomAD AFs ───────────────────────────────────
 
-    def _join_gnomad(self, df: pd.DataFrame, gnomad_path: str) -> pd.DataFrame:
+    def _join_gnomad(
+        self,
+        df: pd.DataFrame,
+        gnomad_path: str,
+        kg_path: Optional[str] = None,
+    ) -> pd.DataFrame:
         gnomad = pd.read_parquet(gnomad_path, columns=["variant_id", "allele_freq"]).copy()
 
         # Build (chrom, pos, ref, alt) join keys from variant_id
@@ -319,6 +325,26 @@ class DataPrepPipeline:
         n_matched = df["allele_freq"].notna().sum()
         logger.info("After gnomAD join: %d / %d variants have AF (%.1f%%).",
                     n_matched, len(df), n_matched / len(df) * 100)
+
+        # ── 1000 Genomes Phase 3 fallback for still-null AFs ──────────────
+        n_null = int(df["allele_freq"].isna().sum())
+        if n_null > 0:
+            if kg_path:
+                from src.data.thousandgenomes import ThousandGenomesConnector
+                kg = ThousandGenomesConnector(kg_path)
+                df = kg.fill_missing_af(df)
+                n_filled = n_null - int(df["allele_freq"].isna().sum())
+                logger.info(
+                    "1000G fallback: filled %d / %d null AFs.",
+                    n_filled, n_null,
+                )
+            else:
+                logger.info(
+                    "%d variants still have null AF after gnomAD join. "
+                    "Pass kg_path for 1000 Genomes fallback.",
+                    n_null,
+                )
+
         return df
 
     # ── Stage 3: Enrich with UniProt protein features ─────────────────────
@@ -615,6 +641,14 @@ class DataPrepPipeline:
         feats["is_autosome"]     = chrom.isin([str(i) for i in range(1, 23)]).astype(int)
         feats["is_sex_chrom"]    = chrom.isin(["X", "Y"]).astype(int)
         feats["is_mitochondrial"] = chrom.isin(["MT", "M"]).astype(int)
+
+        # GNN-derived score (pass-through; 0.5 = no GNN / ambiguous)
+        feats["gnn_score"] = (
+            df.get("gnn_score", pd.Series([0.5] * len(df), index=df.index))
+            .fillna(0.5)
+            .astype(float)
+            .clip(lower=0.0, upper=1.0)
+        )
 
         n_nan = feats.isnull().sum().sum()
         if n_nan > 0:

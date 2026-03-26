@@ -479,3 +479,103 @@ def train_gnn_pipeline(
     trainer = GNNTrainer(model, epochs=epochs, batch_size=batch_size)
     history = trainer.fit(train_data, val_data)
     return model, trainer, history
+
+
+# ---------------------------------------------------------------------------
+# Inference-time gene scorer
+# ---------------------------------------------------------------------------
+class GNNScorer:
+    """
+    Lightweight wrapper for gene-level GNN scoring at inference time.
+
+    At training time, a gene_scores dict is built by averaging GNN predictions
+    over all variants in each gene.  At inference time, a single gene_symbol
+    lookup returns the pre-computed score (or 0.5 if the gene is unknown).
+
+    This avoids rebuilding the full PyG graph at API inference time while
+    still providing GNN signal for known genes.
+
+    Usage
+    -----
+        # At training time:
+        scorer = GNNScorer.from_trainer(trainer, dataset, variant_df)
+        # Attach to InferencePipeline:
+        pipeline = InferencePipeline(..., gnn_scorer=scorer)
+
+        # At inference time (called by InferencePipeline.predict_proba):
+        score = scorer.score("BRCA1")   # -> float in [0, 1]
+    """
+
+    DEFAULT_SCORE = 0.5   # ambiguous / gene not in training set
+
+    def __init__(self, gene_scores: dict[str, float]) -> None:
+        self.gene_scores = gene_scores
+
+    # ------------------------------------------------------------------
+    # Factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_trainer(
+        cls,
+        trainer: "GNNTrainer",
+        dataset: list,
+        variant_df: pd.DataFrame,
+    ) -> "GNNScorer":
+        """
+        Build a GNNScorer by averaging GNN predictions per gene.
+
+        Parameters
+        ----------
+        trainer : GNNTrainer
+            A fitted GNNTrainer (loads best checkpoint automatically if
+            the checkpoint file exists).
+        dataset : list[Data]
+            PyG Data objects built by build_pyg_dataset().  Each Data object
+            has a variant_id attribute used to join back to variant_df.
+        variant_df : pd.DataFrame
+            Raw variant DataFrame with a gene_symbol column.
+        """
+        proba = trainer.predict_proba(dataset)   # (n_variants,)
+
+        vid_to_gene: dict[str, str] = {}
+        if "variant_id" in variant_df.columns and "gene_symbol" in variant_df.columns:
+            vid_to_gene = dict(
+                zip(
+                    variant_df["variant_id"].astype(str),
+                    variant_df["gene_symbol"].fillna("").astype(str),
+                )
+            )
+
+        gene_accumulator: dict[str, list[float]] = {}
+        for data_obj, score in zip(dataset, proba):
+            vid = getattr(data_obj, "variant_id", "")
+            gene = vid_to_gene.get(str(vid), "")
+            if gene:
+                gene_accumulator.setdefault(gene, []).append(float(score))
+
+        gene_scores = {
+            gene: float(np.mean(scores))
+            for gene, scores in gene_accumulator.items()
+        }
+        logger.info(
+            "GNNScorer built for %d genes (mean score %.3f).",
+            len(gene_scores),
+            float(np.mean(list(gene_scores.values()))) if gene_scores else 0.5,
+        )
+        return cls(gene_scores)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def score(self, gene_symbol: str) -> float:
+        """Return GNN pathogenicity score for gene_symbol, or 0.5 if unknown."""
+        return self.gene_scores.get(str(gene_symbol), self.DEFAULT_SCORE)
+
+    def score_dataframe(self, df: pd.DataFrame) -> pd.Series:
+        """Return a Series of gnn_scores indexed like df."""
+        symbols = df.get(
+            "gene_symbol", pd.Series([""] * len(df), index=df.index)
+        ).fillna("")
+        return symbols.map(self.score)

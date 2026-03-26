@@ -169,8 +169,10 @@ TABULAR_FEATURES = [
     "is_autosome",              # chrom in 1–22
     "is_sex_chrom",             # chrom in X, Y
     "is_mitochondrial",         # chrom in MT, M
+    # GNN-derived score (1) — optional; default 0.5 (ambiguous) when GNN absent
+    "gnn_score",                # Graph Attention Network pathogenicity score (0–1)
 ]
-# Total: 6+7+6+9+5+4+2+6+2+3+2+3 = 55
+# Total: 6+7+6+9+5+4+2+6+2+3+2+3+1 = 56
 
 # All planned features have been promoted — PHASE_2_FEATURES is now empty
 PHASE_2_FEATURES: list[str] = []
@@ -200,7 +202,7 @@ class EnsembleConfig:
 # ---------------------------------------------------------------------------
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Derive the 55 tabular features from a raw variant DataFrame.
+    Derive the 56 tabular features from a raw variant DataFrame.
 
     Mirrors DataPrepPipeline._engineer_features() in src/data/real_data_prep.py.
     All missing columns are filled with population-median defaults so the
@@ -218,6 +220,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         codon_position, dbsnp_af,
         omim_n_diseases, omim_is_autosomal_dominant, clingen_validity_score,
         hgmd_is_disease_mutation, hgmd_n_reports,
+        gnn_score,   # GNN pathogenicity score; default 0.5 if GNN not run
         chrom
     """
     feats = pd.DataFrame(index=df.index)
@@ -330,6 +333,14 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     feats["is_autosome"]      = chrom.isin([str(i) for i in range(1, 23)]).astype(int)
     feats["is_sex_chrom"]     = chrom.isin(["X", "Y"]).astype(int)
     feats["is_mitochondrial"] = chrom.isin(["MT", "M"]).astype(int)
+
+    # --- GNN-derived score (1 feature) — 0.5 = no GNN / ambiguous ---
+    feats["gnn_score"] = (
+        df.get("gnn_score", pd.Series([0.5] * len(df), index=df.index))
+        .fillna(0.5)
+        .astype(float)
+        .clip(0.0, 1.0)
+    )
 
     n_nan = feats.isnull().sum().sum()
     if n_nan > 0:

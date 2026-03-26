@@ -295,14 +295,48 @@ class InfoResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 # ACMGish five-tier mapping based on calibrated probability.
-# Calibrate empirically against ClinVar gold-standard after deployment.
-CLASSIFICATION_THRESHOLDS: dict[str, tuple[float, float]] = {
+# These defaults apply when no calibrated threshold file is found.
+# Run scripts/calibrate_thresholds.py to produce models/classification_thresholds.json
+# and override these defaults with empirically-calibrated boundaries.
+_DEFAULT_THRESHOLDS: dict[str, tuple[float, float]] = {
     "Pathogenic":             (0.90, 1.01),
     "Likely pathogenic":      (0.70, 0.90),
     "Uncertain significance": (0.30, 0.70),
     "Likely benign":          (0.10, 0.30),
     "Benign":                 (-0.01, 0.10),
 }
+
+
+def _load_thresholds() -> dict[str, tuple[float, float]]:
+    """
+    Attempt to load calibrated thresholds from models/classification_thresholds.json.
+    Falls back to _DEFAULT_THRESHOLDS silently if the file is absent or malformed.
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    candidates = [
+        Path(os.environ.get("THRESHOLDS_PATH", "")),
+        Path("models/classification_thresholds.json"),
+    ]
+    for path in candidates:
+        if path and path.exists():
+            try:
+                data = json.loads(path.read_text())
+                raw = data.get("thresholds", {})
+                parsed: dict[str, tuple[float, float]] = {}
+                for label, bounds in raw.items():
+                    if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+                        parsed[label] = (float(bounds[0]), float(bounds[1]))
+                if set(parsed.keys()) == set(_DEFAULT_THRESHOLDS.keys()):
+                    return parsed
+            except Exception:
+                pass   # malformed file — use defaults
+    return dict(_DEFAULT_THRESHOLDS)
+
+
+CLASSIFICATION_THRESHOLDS: dict[str, tuple[float, float]] = _load_thresholds()
 
 
 def score_to_classification(score: float) -> tuple[str, str]:
