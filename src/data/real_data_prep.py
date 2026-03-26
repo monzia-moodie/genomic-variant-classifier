@@ -155,6 +155,8 @@ class AnnotationConfig:
     eve_path:           Optional[Path] = None
     hgmd_path:          Optional[Path] = None
     kg_path:            Optional[Path] = None   # 1000 Genomes Phase 3 AF parquet
+    rna_pipeline:       bool           = True   # Phase 6.1: RNA splice-context features
+    protein_cache_dir:  Optional[Path] = None   # Phase 6.2: AlphaFold/UniProt cache dir
 # ---------------------------------------------------------------------------
 # Core pipeline
 # ---------------------------------------------------------------------------
@@ -376,18 +378,22 @@ class DataPrepPipeline:
         Annotate df with pre-computed pathogenicity and conservation scores.
 
         Sequence:
-          1. DbNSFPConnector   -- 6 scores for missense SNVs in dbNSFP
-          2. PhyloPConnector   -- overwrites phylop_score for all positions
-          3. CADDConnector     -- cadd_phred via REST (skipped by default)
-          4. SpliceAIConnector -- splice_ai_score
-          5. AlphaMissense     -- alphamissense_score for missense variants
-          6. GTEx              -- expression and eQTL features
-          7. VEP               -- codon_position (from protein_change column)
-          8. OMIM              -- omim_n_diseases, omim_is_autosomal_dominant
-          9. ClinGen           -- clingen_validity_score
-         10. dbSNP             -- dbsnp_af (AF supplement for gnomAD-absent variants)
-         11. EVE               -- eve_score (evolutionary model)
-         12. HGMD              -- hgmd_is_disease_mutation, hgmd_n_reports
+          1. DbNSFPConnector             -- 6 scores for missense SNVs in dbNSFP
+          2. PhyloPConnector             -- overwrites phylop_score for all positions
+          3. CADDConnector               -- cadd_phred via REST (skipped by default)
+          4. SpliceAIConnector           -- splice_ai_score
+          5. AlphaMissense               -- alphamissense_score for missense variants
+          6. GTEx                        -- expression and eQTL features
+          7. VEP                         -- codon_position (from protein_change column)
+          8. OMIM                        -- omim_n_diseases, omim_is_autosomal_dominant
+          9. ClinGen                     -- clingen_validity_score
+         10. dbSNP                       -- dbsnp_af (AF supplement for gnomAD-absent variants)
+         11. EVE                         -- eve_score (evolutionary model)
+         12. HGMD                        -- hgmd_is_disease_mutation, hgmd_n_reports
+         13. RNASpliceIsoformPipeline    -- maxentscan_score, dist_to_splice_site,
+                                           exon_number, is_canonical_splice (Phase 6.1)
+         14. ProteinStructurePipeline    -- alphafold_plddt, solvent_accessibility,
+                                           secondary_structure_context, dist_to_active_site (Phase 6.2)
 
         All connectors run in stub mode when their file is absent.
         """
@@ -522,8 +528,35 @@ class DataPrepPipeline:
             df["hgmd_is_disease_mutation"] = 0
             df["hgmd_n_reports"] = 0
         logger.info(
-            "Score annotation 12/12 (HGMD): %d variants flagged as disease mutations.",
+            "Score annotation 12/14 (HGMD): %d variants flagged as disease mutations.",
             int((df.get("hgmd_is_disease_mutation", pd.Series([0]*len(df), index=df.index)) == 1).sum()),
+        )
+
+        # 13. RNA splice-isoform pipeline (Phase 6.1)
+        if ac.rna_pipeline:
+            from src.pipelines.rna_pipeline import RNASpliceIsoformPipeline
+            rna = RNASpliceIsoformPipeline()
+            df = rna.annotate_dataframe(df)
+            logger.info(
+                "Score annotation 13/14 (RNA splice): %d splice-gated variants annotated.",
+                int(df.get("is_splice", pd.Series([0]*len(df), index=df.index)).sum()),
+            )
+        else:
+            for col, val in [
+                ("maxentscan_score",    0.0),
+                ("dist_to_splice_site", 50),
+                ("exon_number",         0),
+                ("is_canonical_splice", 0),
+            ]:
+                df[col] = val
+
+        # 14. Protein structure pipeline (Phase 6.2)
+        from src.pipelines.protein_pipeline import ProteinStructurePipeline
+        protein = ProteinStructurePipeline(cache_dir=ac.protein_cache_dir)
+        df = protein.annotate_dataframe(df)
+        logger.info(
+            "Score annotation 14/14 (protein structure): %d missense variants annotated.",
+            int(df.get("is_missense", pd.Series([0]*len(df), index=df.index)).sum()),
         )
 
         return df
@@ -648,6 +681,42 @@ class DataPrepPipeline:
             .fillna(0.5)
             .astype(float)
             .clip(lower=0.0, upper=1.0)
+        )
+
+        # RNA splice-context features (Phase 6.1)
+        feats["maxentscan_score"] = (
+            df.get("maxentscan_score", pd.Series([0.0] * len(df), index=df.index))
+            .fillna(0.0).astype(float)
+        )
+        feats["dist_to_splice_site"] = (
+            df.get("dist_to_splice_site", pd.Series([50] * len(df), index=df.index))
+            .fillna(50).astype(int)
+        )
+        feats["exon_number"] = (
+            df.get("exon_number", pd.Series([0] * len(df), index=df.index))
+            .fillna(0).astype(int)
+        )
+        feats["is_canonical_splice"] = (
+            df.get("is_canonical_splice", pd.Series([0] * len(df), index=df.index))
+            .fillna(0).astype(int)
+        )
+
+        # Protein structure features (Phase 6.2)
+        feats["alphafold_plddt"] = (
+            df.get("alphafold_plddt", pd.Series([50.0] * len(df), index=df.index))
+            .fillna(50.0).astype(float).clip(lower=0.0, upper=100.0)
+        )
+        feats["solvent_accessibility"] = (
+            df.get("solvent_accessibility", pd.Series([0.5] * len(df), index=df.index))
+            .fillna(0.5).astype(float).clip(lower=0.0, upper=1.0)
+        )
+        feats["secondary_structure_context"] = (
+            df.get("secondary_structure_context", pd.Series([0] * len(df), index=df.index))
+            .fillna(0).astype(int).clip(lower=0, upper=2)
+        )
+        feats["dist_to_active_site"] = (
+            df.get("dist_to_active_site", pd.Series([100.0] * len(df), index=df.index))
+            .fillna(100.0).astype(float).clip(lower=0.0)
         )
 
         n_nan = feats.isnull().sum().sum()

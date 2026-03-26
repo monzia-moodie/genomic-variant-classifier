@@ -278,6 +278,21 @@ class GeneSummaryResponse(BaseModel):
     source: str = "ClinVar (training set)"
 
 
+class RsidLookupResponse(BaseModel):
+    """Response for GET /rsid/{rs_id}."""
+
+    rs_id: str = Field(description="Normalised rs-ID (e.g. 'rs12345678').")
+    known: bool = Field(description="True if the rs-ID was found in the dbSNP index.")
+    chrom: Optional[str] = None
+    pos: Optional[int] = None
+    ref: Optional[str] = None
+    alt: Optional[str] = None
+    prediction: Optional[VariantPrediction] = Field(
+        default=None,
+        description="Pathogenicity prediction for the resolved locus, if the model is loaded.",
+    )
+
+
 class InfoResponse(BaseModel):
     model_version: str
     pipeline_version: str

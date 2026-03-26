@@ -94,7 +94,7 @@ def _make_pipeline(proba: float = 0.85):
         metadata       = PipelineMetadata(
             val_auroc     = 0.9847,
             n_train       = 1_197_216,
-            n_features    = 56,
+            n_features    = 64,
             model_version = "phase2",
         ),
     )
@@ -530,8 +530,8 @@ class TestInfoEndpoint:
         assert body["model_version"]     == "phase2-v1"
         assert body["pipeline_version"]  == "1.0.0"
         assert body["training_auroc"]    == pytest.approx(0.9780)
-        assert body["n_features"]        == 56
-        assert len(body["feature_names"]) == 56
+        assert body["n_features"]        == 64
+        assert len(body["feature_names"]) == 64
         # Phase 4: all features promoted, phase2_features_remaining is now empty
         assert isinstance(body["phase2_features_remaining"], list)
 
@@ -665,3 +665,159 @@ class TestBatchEndpoint:
             assert r.status_code == 503
         finally:
             api_main._PIPELINE = original
+
+
+# ---------------------------------------------------------------------------
+# 7. /rsid/{rs_id} endpoint
+# ---------------------------------------------------------------------------
+
+class TestRsidEndpoint:
+
+    def test_rsid_unknown_when_no_index(self, client):
+        """With no dbSNP index loaded, /rsid always returns known=false."""
+        import src.api.main as api_main
+        original = api_main._DBSNP_INDEX
+        api_main._DBSNP_INDEX = None
+        try:
+            r = client.get("/rsid/rs12345678")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["known"] is False
+            assert body["rs_id"] == "rs12345678"
+        finally:
+            api_main._DBSNP_INDEX = original
+
+    def test_rsid_known_with_index(self, client):
+        """With a mock dbSNP index, /rsid resolves locus and returns prediction."""
+        import pandas as pd
+        import src.api.main as api_main
+
+        mock_index = pd.DataFrame([{
+            "rs_id": "rs12345678",
+            "chrom": "1",
+            "pos": 925952,
+            "ref": "G",
+            "alt": "T",
+        }]).set_index("rs_id")
+
+        original = api_main._DBSNP_INDEX
+        api_main._DBSNP_INDEX = mock_index
+        try:
+            r = client.get("/rsid/rs12345678")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["known"] is True
+            assert body["chrom"] == "1"
+            assert body["pos"] == 925952
+            assert body["ref"] == "G"
+            assert body["alt"] == "T"
+            # Pipeline is loaded in the client fixture, so prediction should be present
+            assert body["prediction"] is not None
+            assert 0.0 <= body["prediction"]["pathogenicity_score"] <= 1.0
+        finally:
+            api_main._DBSNP_INDEX = original
+
+    def test_rsid_normalises_prefix(self, client):
+        """rs-ID without 'rs' prefix is accepted and normalised."""
+        import src.api.main as api_main
+
+        original = api_main._DBSNP_INDEX
+        api_main._DBSNP_INDEX = None
+        try:
+            r = client.get("/rsid/12345678")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["rs_id"] == "rs12345678"
+        finally:
+            api_main._DBSNP_INDEX = original
+
+    def test_rsid_no_prediction_when_no_model(self):
+        """When pipeline is not loaded, /rsid still resolves locus but no prediction."""
+        import pandas as pd
+        from fastapi.testclient import TestClient
+        import src.api.main as api_main
+
+        mock_index = pd.DataFrame([{
+            "rs_id": "rs99999999",
+            "chrom": "2",
+            "pos": 100,
+            "ref": "A",
+            "alt": "T",
+        }]).set_index("rs_id")
+
+        orig_pipeline = api_main._PIPELINE
+        orig_index    = api_main._DBSNP_INDEX
+        api_main._PIPELINE    = None
+        api_main._DBSNP_INDEX = mock_index
+        try:
+            c = TestClient(api_main.app)
+            r = c.get("/rsid/rs99999999")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["known"] is True
+            assert body["prediction"] is None
+        finally:
+            api_main._PIPELINE    = orig_pipeline
+            api_main._DBSNP_INDEX = orig_index
+
+
+# ---------------------------------------------------------------------------
+# 8. Auth header (X-API-Key)
+# ---------------------------------------------------------------------------
+
+class TestApiKeyAuth:
+
+    def test_dev_mode_no_key_required(self, client):
+        """When API_KEYS env var is empty, all requests pass without a key."""
+        import src.api.auth as auth_module
+        original = auth_module._VALID_KEYS
+        auth_module._VALID_KEYS = frozenset()   # simulate dev mode
+        try:
+            r = client.get("/info")
+            assert r.status_code == 200
+        finally:
+            auth_module._VALID_KEYS = original
+
+    def test_valid_key_accepted(self, client):
+        """A request with a valid X-API-Key is accepted."""
+        import src.api.auth as auth_module
+        original = auth_module._VALID_KEYS
+        auth_module._VALID_KEYS = frozenset({"test-key"})
+        try:
+            r = client.get("/info", headers={"X-API-Key": "test-key"})
+            assert r.status_code == 200
+        finally:
+            auth_module._VALID_KEYS = original
+
+    def test_invalid_key_rejected(self, client):
+        """A request with a wrong key returns 401."""
+        import src.api.auth as auth_module
+        original = auth_module._VALID_KEYS
+        auth_module._VALID_KEYS = frozenset({"test-key"})
+        try:
+            r = client.get("/info", headers={"X-API-Key": "wrong-key"})
+            assert r.status_code == 401
+        finally:
+            auth_module._VALID_KEYS = original
+
+    def test_missing_key_rejected(self, client):
+        """A request with no key returns 401 when API_KEYS is set."""
+        import src.api.auth as auth_module
+        original = auth_module._VALID_KEYS
+        auth_module._VALID_KEYS = frozenset({"test-key"})
+        try:
+            r = client.get("/info")
+            assert r.status_code == 401
+        finally:
+            auth_module._VALID_KEYS = original
+
+    def test_health_always_open(self, client):
+        """/health must not require auth even when API_KEYS is set."""
+        import src.api.auth as auth_module
+        original = auth_module._VALID_KEYS
+        auth_module._VALID_KEYS = frozenset({"test-key"})
+        try:
+            r = client.get("/health")
+            assert r.status_code == 200
+        finally:
+            auth_module._VALID_KEYS = original

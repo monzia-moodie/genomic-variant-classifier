@@ -39,9 +39,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 INFERENCE_FEATURE_COLUMNS: list[str] = list(TABULAR_FEATURES)
-assert len(INFERENCE_FEATURE_COLUMNS) == 56, (
+assert len(INFERENCE_FEATURE_COLUMNS) == 64, (
     f"INFERENCE_FEATURE_COLUMNS has {len(INFERENCE_FEATURE_COLUMNS)} entries; "
-    "expected 56.  Update TABULAR_FEATURES in src/models/variant_ensemble.py."
+    "expected 64.  Update TABULAR_FEATURES in src/models/variant_ensemble.py."
 )
 
 
@@ -70,7 +70,7 @@ class InferencePipeline:
 
     At inference time the pipeline:
       1. Optionally scores variants via GNNScorer → adds gnn_score column
-      2. Calls engineer_features() to derive the 56 INFERENCE_FEATURE_COLUMNS
+      2. Calls engineer_features() to derive the 64 INFERENCE_FEATURE_COLUMNS
       3. Applies the StandardScaler (if present)
       4. Drives each base model with a numpy array → stacks predictions
       5. Feeds the stack to the meta-learner

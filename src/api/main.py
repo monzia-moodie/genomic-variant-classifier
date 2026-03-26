@@ -7,6 +7,8 @@ Endpoints
 ---------
   GET  /health           Liveness + readiness check
   GET  /info             Model metadata and feature list
+  GET  /metrics          Prometheus metrics
+  GET  /gene/{symbol}    Gene-level features for request enrichment
   POST /predict          Classify a single variant
   POST /batch            Classify up to 1 000 variants
 
@@ -25,7 +27,16 @@ Environment variables
                       (default: models/phase2_pipeline.joblib)
   GNOMAD_INDEX_PATH   Optional path to gnomAD parquet for live AF lookup
                       (default: None — callers must supply allele_freq)
+  GENE_SUMMARY_PATH   Path to gene summary parquet
+                      (default: data/processed/gene_summary.parquet)
+  API_KEYS            Comma-separated list of valid X-API-Key tokens.
+                      When empty or unset auth is disabled (dev mode).
   LOG_LEVEL           Python logging level (default: INFO)
+  LOG_FORMAT          "json" for structured JSON output, "text" otherwise
+                      (default: "json")
+  DBSNP_INDEX_PATH    Optional path to dbSNP parquet (columns: rs_id, chrom,
+                      pos, ref, alt) for /rsid/{rs_id} lookups
+                      (default: data/processed/dbsnp_index.parquet)
 
 Implementation notes
 --------------------
@@ -33,16 +44,18 @@ Implementation notes
   singleton.  Concurrent requests share it read-only (joblib artifacts are
   thread-safe after load).
 * Feature engineering is delegated to the InferencePipeline wrapper
-  (``src/api/pipeline.py``), which replicates the 55-feature logic from
+  (``src/api/pipeline.py``), which replicates the 64-feature logic from
   ``DataPrepPipeline._engineer_features`` without any I/O side-effects.
-* SHAP explanations are computed only when the request payload is small
-  (≤ 10 variants) or when explicitly requested, to keep p99 latency low.
+* Auth is HTTPBearer.  When VALID_API_KEYS is empty, all requests are
+  allowed (development mode).  /health is always public.
+* Rate limits: /predict 1000/min per key, /batch 100/min per key.
+* /metrics is served by prometheus-fastapi-instrumentator.
 
-Phase 4 features added (all now in active feature set):
-  - splice_ai_score, eve_score (functional scores)
-  - codon_position, dbsnp_af (coding context)
-  - omim_n_diseases, omim_is_autosomal_dominant, clingen_validity_score (gene-disease)
-  - hgmd_is_disease_mutation, hgmd_n_reports (HGMD, requires institutional license)
+Phase 7 additions:
+  7.1 — API key authentication (X-API-Key header + API_KEYS env var)
+  7.2 — Rate limiting (slowapi; /predict 1000/min, /batch 100/min)
+  7.4 — Structured JSON logging (python-json-logger)
+  7.5 — Prometheus /metrics endpoint
 """
 
 from __future__ import annotations
@@ -56,10 +69,11 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.auth import require_api_key
 from src.api.schemas import (
     BatchPredictRequest,
     BatchPredictResponse,
@@ -67,10 +81,43 @@ from src.api.schemas import (
     HealthResponse,
     InfoResponse,
     PredictResponse,
+    RsidLookupResponse,
     VariantPrediction,
     VariantRequest,
     score_to_classification,
 )
+
+# ---------------------------------------------------------------------------
+# NOTE: Auth dependency is in src/api/auth.py (X-API-Key header, API_KEYS env var)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Logging — structured JSON when LOG_FORMAT=json (default in Docker)
+# ---------------------------------------------------------------------------
+
+def _configure_logging() -> None:
+    level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    fmt   = os.environ.get("LOG_FORMAT", "json").lower()
+
+    if fmt == "json":
+        try:
+            from pythonjsonlogger.jsonlogger import JsonFormatter
+            handler = logging.StreamHandler()
+            handler.setFormatter(
+                JsonFormatter(
+                    "%(asctime)s %(name)s %(levelname)s %(message)s "
+                    "%(pathname)s %(lineno)d"
+                )
+            )
+            logging.root.handlers = []
+            logging.root.addHandler(handler)
+            logging.root.setLevel(level)
+            return
+        except ImportError:
+            pass  # fall through to text formatter
+
+    logging.basicConfig(level=level, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +132,15 @@ GNOMAD_INDEX_PATH: Optional[Path] = (
 GENE_SUMMARY_PATH: Optional[Path] = Path(
     os.environ.get("GENE_SUMMARY_PATH", "data/processed/gene_summary.parquet")
 )
+DBSNP_INDEX_PATH: Optional[Path] = Path(
+    os.environ.get("DBSNP_INDEX_PATH", "data/processed/dbsnp_index.parquet")
+)
 
 # Filled at startup
-_PIPELINE: Any = None                         # InferencePipeline instance
+_PIPELINE: Any = None
 _GNOMAD_INDEX: Optional[pd.DataFrame] = None
-_GENE_SUMMARY: Optional[pd.DataFrame] = None  # gene_symbol-indexed gene summary table
+_GENE_SUMMARY: Optional[pd.DataFrame] = None
+_DBSNP_INDEX: Optional[pd.DataFrame] = None   # rs_id → chrom/pos/ref/alt
 _START_TIME: float = time.monotonic()
 
 # Model provenance — update after each training run
@@ -101,13 +152,50 @@ HOLDOUT_AUROC    = 0.9847   # gene-stratified, 154 K variants
 
 
 # ---------------------------------------------------------------------------
+# Rate limiting (7.2)
+# ---------------------------------------------------------------------------
+
+try:
+    from slowapi import Limiter
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.util import get_remote_address
+
+    def _rate_key(request: Request) -> str:
+        """Use the API key as rate-limit identity; fall back to IP."""
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            key = auth[7:].strip()
+            if key:
+                return key
+        return get_remote_address(request)
+
+    _limiter = Limiter(key_func=_rate_key)
+    _SLOWAPI_AVAILABLE = True
+
+except ImportError:
+    _limiter = None  # type: ignore[assignment]
+    _SLOWAPI_AVAILABLE = False
+
+
+def _rate_limit(rate: str):
+    """Apply slowapi rate limiting when available; no-op decorator otherwise."""
+    if _SLOWAPI_AVAILABLE and _limiter is not None:
+        return _limiter.limit(rate)
+    def _noop(f):
+        return f
+    return _noop
+
+
+# ---------------------------------------------------------------------------
 # Startup / shutdown
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model, optional gnomAD index, and gene summary table at startup."""
-    global _PIPELINE, _GNOMAD_INDEX, _GENE_SUMMARY
+    """Configure logging, load model and auxiliary tables at startup."""
+    global _PIPELINE, _GNOMAD_INDEX, _GENE_SUMMARY, _DBSNP_INDEX
+
+    _configure_logging()
 
     # --- Load inference pipeline ---
     if MODEL_PATH.exists():
@@ -117,7 +205,6 @@ async def lifespan(app: FastAPI):
             logger.info("Loaded inference pipeline from %s", MODEL_PATH)
         except Exception as exc:
             logger.error("Failed to load pipeline from %s: %s", MODEL_PATH, exc)
-            # API starts in degraded mode; /health will report model_loaded=False
     else:
         logger.warning(
             "MODEL_PATH %s does not exist.  "
@@ -125,7 +212,7 @@ async def lifespan(app: FastAPI):
             MODEL_PATH,
         )
 
-    # --- Load gnomAD AF index (optional) ------------------------------------
+    # --- Load gnomAD AF index (optional) ---
     if GNOMAD_INDEX_PATH and GNOMAD_INDEX_PATH.exists():
         try:
             _GNOMAD_INDEX = pd.read_parquet(
@@ -136,7 +223,7 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("Could not load gnomAD index: %s", exc)
 
-    # --- Load gene summary table (strongly recommended) ---------------------
+    # --- Load gene summary table ---
     if GENE_SUMMARY_PATH and GENE_SUMMARY_PATH.exists():
         try:
             _GENE_SUMMARY = pd.read_parquet(GENE_SUMMARY_PATH).set_index("gene_symbol")
@@ -148,6 +235,22 @@ async def lifespan(app: FastAPI):
             "GENE_SUMMARY_PATH %s not found — gene features will use defaults "
             "when callers omit them.  Build with scripts/build_gene_summary.py.",
             GENE_SUMMARY_PATH,
+        )
+
+    # --- Load dbSNP rs-ID index (optional) ---
+    if DBSNP_INDEX_PATH and DBSNP_INDEX_PATH.exists():
+        try:
+            _DBSNP_INDEX = pd.read_parquet(
+                DBSNP_INDEX_PATH, columns=["rs_id", "chrom", "pos", "ref", "alt"]
+            ).set_index("rs_id")
+            logger.info("Loaded dbSNP index: %d rs-IDs", len(_DBSNP_INDEX))
+        except Exception as exc:
+            logger.warning("Could not load dbSNP index: %s", exc)
+    else:
+        logger.info(
+            "DBSNP_INDEX_PATH %s not found — /rsid lookups will return known=false. "
+            "Build with: python scripts/build_dbsnp_index.py",
+            DBSNP_INDEX_PATH,
         )
 
     yield  # app is running
@@ -173,47 +276,110 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],       # tighten in production
+    allow_origins=["*"],
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# Attach rate limiter state and exception handler
+if _SLOWAPI_AVAILABLE:
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.middleware import SlowAPIMiddleware
+
+    app.state.limiter = _limiter
+    app.add_middleware(SlowAPIMiddleware)
+
+    @app.exception_handler(RateLimitExceeded)
+    async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={"detail": f"Rate limit exceeded: {exc.detail}"},
+        )
+
+# Prometheus metrics (7.5)
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator(
+        should_group_status_codes=True,
+        excluded_handlers=["/metrics", "/health"],
+    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+except ImportError:
+    pass  # prometheus-fastapi-instrumentator not installed; /metrics silently absent
+
+
+# ---------------------------------------------------------------------------
+# Request logging middleware (7.4)
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def _log_requests(request: Request, call_next):
+    start = time.monotonic()
+    response = await call_next(request)
+    latency_ms = round((time.monotonic() - start) * 1000, 1)
+    logger.info(
+        "request",
+        extra={
+            "method":     request.method,
+            "path":       request.url.path,
+            "status":     response.status_code,
+            "latency_ms": latency_ms,
+        },
+    )
+    return response
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _lookup_rsid(rs_id: str) -> Optional[dict]:
+    """Return chrom/pos/ref/alt for an rs-ID, or None if not in the dbSNP index."""
+    if _DBSNP_INDEX is None:
+        return None
+    # Normalise: ensure lowercase "rs" prefix and strip whitespace
+    key = rs_id.strip().lower()
+    if not key.startswith("rs"):
+        key = "rs" + key
+    try:
+        row = _DBSNP_INDEX.loc[key]
+        return {
+            "chrom": str(row["chrom"]),
+            "pos":   int(row["pos"]),
+            "ref":   str(row["ref"]),
+            "alt":   str(row["alt"]),
+        }
+    except KeyError:
+        return None
+
+
 def _lookup_gene_count(gene_symbol: str) -> Optional[int]:
-    """Return ClinVar pathogenic variant count for a gene, or None if table not loaded."""
     if _GENE_SUMMARY is None or not gene_symbol:
         return None
     try:
         return int(_GENE_SUMMARY.loc[gene_symbol, "n_pathogenic_in_gene"])
     except KeyError:
-        return 0   # gene not in ClinVar — treat as no known pathogenic variants
+        return 0
 
 
 def _lookup_gnomad_af(variant_id: str) -> Optional[float]:
-    """Try to resolve allele frequency from the in-memory gnomAD index."""
     if _GNOMAD_INDEX is None:
         return None
     try:
         return float(_GNOMAD_INDEX.loc[variant_id, "allele_freq"])
     except KeyError:
-        return 0.0   # absent from gnomAD → treat as ultra-rare
+        return 0.0
     except Exception:
         return None
 
 
 def _variant_to_row(req: VariantRequest) -> dict:
-    """Convert a VariantRequest to the flat dict expected by the pipeline."""
     variant_id = f"{req.chrom}:{req.pos}:{req.ref}:{req.alt}"
 
     af = req.allele_freq
     if af is None:
         af = _lookup_gnomad_af(variant_id)
     if af is None:
-        af = 0.0   # conservative default
+        af = 0.0
 
     return {
         "variant_id":             variant_id,
@@ -248,12 +414,10 @@ def _variant_to_row(req: VariantRequest) -> dict:
         ),
         "has_uniprot_annotation": req.has_uniprot_annotation or 0,
         "n_known_pathogenic_protein_variants": req.n_known_pathogenic_protein_variants or 0,
-        # GTEx features omitted — engineer_features() defaults all to 0
     }
 
 
 def _make_prediction(row: dict) -> VariantPrediction:
-    """Run feature engineering + model inference for one variant dict."""
     result = _PIPELINE.predict_single(row)
     score  = float(np.clip(result["pathogenicity_score"], 0.0, 1.0))
     classification, confidence = score_to_classification(score)
@@ -285,6 +449,7 @@ def _make_prediction(row: dict) -> VariantPrediction:
     tags=["ops"],
 )
 async def health() -> HealthResponse:
+    # /health is intentionally unauthenticated for load-balancer probes
     return HealthResponse(
         status              = "ok" if _PIPELINE is not None else "degraded",
         model_loaded        = _PIPELINE is not None,
@@ -300,7 +465,7 @@ async def health() -> HealthResponse:
     summary="Model metadata, version, and feature list",
     tags=["ops"],
 )
-async def info() -> InfoResponse:
+async def info(_key: str = Depends(require_api_key)) -> InfoResponse:
     feature_names: list[str] = []
     n_features = 0
 
@@ -316,7 +481,7 @@ async def info() -> InfoResponse:
         holdout_auroc             = HOLDOUT_AUROC,
         n_features                = n_features,
         feature_names             = feature_names,
-        phase2_features_remaining = [],  # all features promoted in Phase 4
+        phase2_features_remaining = [],
         description=(
             "LightGBM / XGBoost / GBM / RF / LR ensemble with stacking "
             "meta-learner.  Trained on 1.2 M tier-2 ClinVar variants with "
@@ -331,7 +496,12 @@ async def info() -> InfoResponse:
     summary="Classify a single genomic variant",
     tags=["inference"],
 )
-async def predict(request: VariantRequest) -> PredictResponse:
+@_rate_limit("1000/minute")
+async def predict(
+    request: Request,
+    body: VariantRequest,
+    _key: str = Depends(require_api_key),
+) -> PredictResponse:
     if _PIPELINE is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -341,10 +511,10 @@ async def predict(request: VariantRequest) -> PredictResponse:
             ),
         )
     try:
-        row  = _variant_to_row(request)
+        row  = _variant_to_row(body)
         pred = _make_prediction(row)
     except Exception as exc:
-        logger.exception("Prediction failed for %s", request)
+        logger.exception("Prediction failed for %s", body)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction error: {exc}",
@@ -363,14 +533,19 @@ async def predict(request: VariantRequest) -> PredictResponse:
     summary="Classify up to 1 000 variants",
     tags=["inference"],
 )
-async def batch_predict(request: BatchPredictRequest) -> BatchPredictResponse:
+@_rate_limit("100/minute")
+async def batch_predict(
+    request: Request,
+    body: BatchPredictRequest,
+    _key: str = Depends(require_api_key),
+) -> BatchPredictResponse:
     if _PIPELINE is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Model not loaded.",
         )
     try:
-        rows        = [_variant_to_row(v) for v in request.variants]
+        rows        = [_variant_to_row(v) for v in body.variants]
         raw_results = _PIPELINE.predict_batch(rows)
 
         predictions: list[VariantPrediction] = []
@@ -385,7 +560,7 @@ async def batch_predict(request: BatchPredictRequest) -> BatchPredictResponse:
             ))
 
     except Exception as exc:
-        logger.exception("Batch prediction failed (%d variants)", len(request.variants))
+        logger.exception("Batch prediction failed (%d variants)", len(body.variants))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Batch prediction error: {exc}",
@@ -405,16 +580,18 @@ async def batch_predict(request: BatchPredictRequest) -> BatchPredictResponse:
 @app.get(
     "/gene/{gene_symbol}",
     response_model=GeneSummaryResponse,
-    summary="Gene-level features for request enrichment (n_pathogenic_in_gene, gene_constraint_oe, has_uniprot_annotation)",
+    summary="Gene-level features for request enrichment",
     tags=["reference"],
 )
-async def gene_summary(gene_symbol: str) -> GeneSummaryResponse:
+async def gene_summary(
+    gene_symbol: str,
+    _key: str = Depends(require_api_key),
+) -> GeneSummaryResponse:
     """
     Return the three gene-level features used by the model for a given HGNC symbol.
 
     Callers can use this to auto-enrich /predict or /batch requests rather than
-    looking up counts themselves.  gene_constraint_oe is null when gnomAD
-    constraint data has not been loaded; engineer_features() will default to 1.0.
+    looking up counts themselves.
     """
     if _GENE_SUMMARY is None:
         raise HTTPException(
@@ -424,11 +601,10 @@ async def gene_summary(gene_symbol: str) -> GeneSummaryResponse:
     try:
         row = _GENE_SUMMARY.loc[gene_symbol]
     except KeyError:
-        # Unknown gene — return zeros (conservative defaults)
         return GeneSummaryResponse(
-            gene_symbol          = gene_symbol,
-            n_pathogenic_in_gene = 0,
-            gene_constraint_oe   = None,
+            gene_symbol            = gene_symbol,
+            n_pathogenic_in_gene   = 0,
+            gene_constraint_oe     = None,
             has_uniprot_annotation = 0,
         )
 
@@ -441,12 +617,69 @@ async def gene_summary(gene_symbol: str) -> GeneSummaryResponse:
     )
 
 
+@app.get(
+    "/rsid/{rs_id}",
+    response_model=RsidLookupResponse,
+    summary="Resolve an rs-ID to a genomic locus and classify",
+    tags=["lookup"],
+)
+async def rsid_lookup(
+    rs_id: str,
+    _key: str = Depends(require_api_key),
+) -> RsidLookupResponse:
+    """
+    Resolve an NCBI dbSNP rs-ID to chrom:pos:ref:alt (GRCh38) and optionally
+    classify the resolved variant.
+
+    Requires the dbSNP index parquet to be present at DBSNP_INDEX_PATH.
+    When the index is absent or the rs-ID is unknown, ``known=false`` is
+    returned with no prediction.
+
+    The rs-ID is normalised: leading 'rs' prefix is case-insensitive and
+    optional (both 'rs12345678' and '12345678' are accepted).
+    """
+    normalised_id = rs_id.strip().lower()
+    if not normalised_id.startswith("rs"):
+        normalised_id = "rs" + normalised_id
+
+    locus = _lookup_rsid(rs_id)
+
+    if locus is None:
+        return RsidLookupResponse(rs_id=normalised_id, known=False)
+
+    # Attempt prediction if the model is loaded
+    prediction: Optional[VariantPrediction] = None
+    if _PIPELINE is not None:
+        try:
+            row = _variant_to_row(
+                VariantRequest(
+                    chrom=locus["chrom"],
+                    pos=locus["pos"],
+                    ref=locus["ref"],
+                    alt=locus["alt"],
+                )
+            )
+            prediction = _make_prediction(row)
+        except Exception as exc:
+            logger.warning("rsid_lookup: prediction failed for %s: %s", rs_id, exc)
+
+    return RsidLookupResponse(
+        rs_id=normalised_id,
+        known=True,
+        chrom=locus["chrom"],
+        pos=locus["pos"],
+        ref=locus["ref"],
+        alt=locus["alt"],
+        prediction=prediction,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Global error handler
 # ---------------------------------------------------------------------------
 
 @app.exception_handler(Exception)
-async def _global_handler(request, exc: Exception):
+async def _global_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

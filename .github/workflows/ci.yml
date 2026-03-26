@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main"]
+  release:
+    types: [published]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/genomic-variant-api
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Check that requirements-api.lock is in sync with requirements-api.txt.
+  # Run locally to regenerate:
+  #   pip install pip-tools
+  #   pip-compile requirements-api.txt -o requirements-api.lock
+  # ─────────────────────────────────────────────────────────────────────────
+  lockfile-check:
+    name: lockfile drift check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Check lockfile is up-to-date
+        run: |
+          pip install pip-tools
+          # Regenerate into a temp file; fail if it differs from committed lockfile
+          pip-compile requirements-api.txt -o /tmp/requirements-api.lock --quiet
+          if [ -f requirements-api.lock ]; then
+            diff requirements-api.lock /tmp/requirements-api.lock || \
+              (echo "requirements-api.lock is out of date. Run: pip-compile requirements-api.txt -o requirements-api.lock" && exit 1)
+          else
+            echo "requirements-api.lock does not exist yet — skipping drift check (first run)."
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────────
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    needs: lockfile-check
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Use lockfile when present (exact reproducibility); fall back to ranges
+          if [ -f requirements-api.lock ]; then
+            pip install -r requirements-api.lock
+          else
+            pip install -r requirements.txt -r requirements-api.txt
+          fi
+          pip install pytest pytest-cov
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ -x -q \
+            --tb=short \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker build smoke test
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: |
+          docker build \
+            --target api \
+            --tag genomic-variant-api:smoke \
+            --file Dockerfile \
+            .
+
+      - name: Smoke-test container
+        run: |
+          docker run --rm --detach \
+            --name smoke-api \
+            -p 8000:8000 \
+            genomic-variant-api:smoke
+          sleep 5
+          curl --fail --silent http://localhost:8000/health | grep -q '"status"'
+          docker stop smoke-api
+
+  # ─────────────────────────────────────────────────────────────────────────
+  push-ghcr:
+    name: Push image to GHCR
+    runs-on: ubuntu-latest
+    needs: [test, docker-build]
+    if: github.event_name == 'release' && github.event.action == 'published'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          target: api
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

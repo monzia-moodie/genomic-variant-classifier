@@ -2,12 +2,12 @@
 tests/unit/test_splice_ai_promotion.py
 =======================================
 Regression tests documenting the PROMOTION of splice_ai_score (and new Phase 4
-features) into TABULAR_FEATURES, and verifying the new 56-feature contract.
+features) into TABULAR_FEATURES, and verifying the new 64-feature contract.
 
 Key invariants tested:
   1.  splice_ai_score IS in TABULAR_FEATURES (promoted from PHASE_2_FEATURES)
   2.  PHASE_2_FEATURES is empty (all features promoted)
-  3.  TABULAR_FEATURES has exactly 56 entries (55 tabular + gnn_score)
+  3.  TABULAR_FEATURES has exactly 64 entries (56 tabular + 4 RNA + 4 protein)
   4.  engineer_features() output columns match TABULAR_FEATURES exactly
   5.  engineer_features() produces no NaN values
   6.  All 9 new Phase 4 features are present in TABULAR_FEATURES
@@ -103,9 +103,9 @@ def test_phase_2_features_is_empty():
 # ---------------------------------------------------------------------------
 
 def test_tabular_features_length():
-    """TABULAR_FEATURES must have exactly 56 entries (55 tabular + gnn_score)."""
-    assert len(TABULAR_FEATURES) == 56, (
-        f"Expected 56 TABULAR_FEATURES, got {len(TABULAR_FEATURES)}: {TABULAR_FEATURES}"
+    """TABULAR_FEATURES must have exactly 64 entries (56 tabular + 4 RNA + 4 protein)."""
+    assert len(TABULAR_FEATURES) == 64, (
+        f"Expected 64 TABULAR_FEATURES, got {len(TABULAR_FEATURES)}: {TABULAR_FEATURES}"
     )
 
 
@@ -154,9 +154,8 @@ def test_new_features_in_tabular_features():
 # ---------------------------------------------------------------------------
 
 def test_gnn_score_in_tabular_features():
-    """gnn_score must be the last entry in TABULAR_FEATURES."""
+    """gnn_score must be present in TABULAR_FEATURES."""
     assert "gnn_score" in TABULAR_FEATURES
-    assert TABULAR_FEATURES[-1] == "gnn_score"
 
 
 def test_gnn_score_default_half_when_absent():

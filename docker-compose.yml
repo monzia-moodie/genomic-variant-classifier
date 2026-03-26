@@ -4,9 +4,11 @@
 #
 # Services
 # --------
-#   api       FastAPI inference service (always started)
-#   api-dev   Hot-reload dev server on port 8001 (--profile dev)
-#   trainer   Batch training job       (run with: docker compose run trainer)
+#   api         FastAPI inference service (always started)
+#   api-dev     Hot-reload dev server on port 8001 (--profile dev)
+#   trainer     Batch training job       (run with: docker compose run trainer)
+#   prometheus  Metrics collection       (--profile monitoring)
+#   grafana     Metrics dashboard        (--profile monitoring)
 #
 # Quick start
 # -----------
@@ -25,6 +27,11 @@
 #   curl -X POST http://localhost:8000/predict \
 #        -H "Content-Type: application/json" \
 #        -d '{"chrom":"17","pos":41276045,"ref":"C","alt":"T","gene_symbol":"BRCA1"}'
+#
+#   # 5. Start with monitoring
+#   docker compose --profile monitoring up
+#   # Prometheus: http://localhost:9090
+#   # Grafana:    http://localhost:3000  (admin / admin)
 #
 # Volumes
 # -------
@@ -52,12 +59,13 @@ services:
       # Uncomment to enable live gnomAD AF lookup (large file — 8 GB memory):
       # GNOMAD_INDEX_PATH: /app/data/processed/gnomad_v4_exomes.parquet
       LOG_LEVEL:          INFO
+      LOG_FORMAT:         json
       WORKERS:            "2"
+      # Set API_KEYS to a comma-separated list to enable auth (X-API-Key header):
+      # API_KEYS: key1,key2
     volumes:
       - ./models:/app/models:ro
       - ./data/processed/gene_summary.parquet:/app/data/processed/gene_summary.parquet:ro
-      # Mount source for local development hot-reload (remove in production):
-      # - ./src:/app/src:ro
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request, sys; r = urllib.request.urlopen('http://localhost:8000/health', timeout=4); sys.exit(0 if r.status == 200 else 1)"]
@@ -130,6 +138,55 @@ services:
           --output models/phase2_pipeline.joblib
       "
 
+  # --------------------------------------------------------------------------
+  # Prometheus — scrapes /metrics from the api service
+  # Start with: docker compose --profile monitoring up
+  # --------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: genomic-variant-prometheus
+    profiles:
+      - monitoring
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    depends_on:
+      - api
+    networks:
+      - app-net
+
+  # --------------------------------------------------------------------------
+  # Grafana — visualises Prometheus metrics
+  # Default credentials: admin / admin (change on first login)
+  # --------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.3
+    container_name: genomic-variant-grafana
+    profiles:
+      - monitoring
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - app-net
+
 networks:
   app-net:
     driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

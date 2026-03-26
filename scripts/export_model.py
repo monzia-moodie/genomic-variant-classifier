@@ -10,9 +10,23 @@ What this script does
    from a run_phase2_eval.py output directory).
 2. Wraps it with the fitted ``StandardScaler`` and feature list in a
    ``src.api.pipeline.InferencePipeline`` instance.
-3. Writes the artefact to ``--output`` (default: models/phase2_pipeline.joblib).
-4. Runs a smoke-test: classifies three known ClinVar variants and asserts
+3. Optionally excludes large base models (``--exclude-models``) to reduce
+   artefact size without significant AUROC loss.
+4. Writes the artefact to ``--output`` (default: models/phase2_pipeline.joblib).
+5. Runs a smoke-test: classifies three known ClinVar variants and asserts
    BRCA1 c.68_69del (pathogenic) scores higher than a benign control.
+
+Model size guide (approximate serialised sizes)
+------------------------------------------------
+  random_forest    ~1 200 MB   (large due to deep trees × 300 estimators)
+  gradient_boosting  ~400 MB
+  xgboost            ~120 MB
+  lightgbm            ~50 MB
+  logistic_regression  ~1 MB
+
+Recommended production export (< 200 MB, AUROC ~0.9845):
+  python scripts/export_model.py --input outputs/run \\
+      --exclude-models random_forest gradient_boosting
 
 Usage
 -----
@@ -21,11 +35,14 @@ Usage
       --input  outputs/phase2_with_gnomad \\
       --output models/phase2_pipeline.joblib
 
+  # Slim export (~200 MB) suitable for Docker:
+  python scripts/export_model.py \\
+      --input  outputs/phase2_with_gnomad \\
+      --output models/phase2_pipeline_slim.joblib \\
+      --exclude-models random_forest gradient_boosting
+
   # Verify the exported artefact without re-exporting:
   python scripts/export_model.py verify models/phase2_pipeline.joblib
-
-The exported artefact is ~50–200 MB depending on whether LightGBM or
-XGBoost model trees are included.
 
 Exit codes
 ----------
@@ -224,10 +241,39 @@ def cmd_export(args: argparse.Namespace) -> int:
         logger.error("Input directory not found: %s", run_dir)
         return 1
 
+    exclude: set[str] = set(args.exclude_models or [])
+    if exclude:
+        logger.info("Excluding base models from artefact: %s", sorted(exclude))
+
     try:
         ensemble, _ = _load_ensemble_from_run(run_dir)
         scaler        = _load_scaler(run_dir)
         feature_names = _load_feature_names(run_dir) or list(TABULAR_FEATURES)
+
+        # Drop unwanted base models before wrapping
+        if exclude and hasattr(ensemble, "trained_models_"):
+            before = set(ensemble.trained_models_.keys())
+            ensemble.trained_models_ = {
+                k: v for k, v in ensemble.trained_models_.items()
+                if k not in exclude
+            }
+            after = set(ensemble.trained_models_.keys())
+            removed = before - after
+            if removed:
+                logger.info(
+                    "Removed base models: %s  (remaining: %s)",
+                    sorted(removed), sorted(after),
+                )
+            unknown = exclude - before
+            if unknown:
+                logger.warning(
+                    "Requested to exclude %s but they were not in trained_models_: %s",
+                    sorted(unknown), sorted(before),
+                )
+
+        if not getattr(ensemble, "trained_models_", {}):
+            logger.error("No base models remain after exclusion.  Aborting.")
+            return 1
 
         # Read provenance from metrics.json if present
         val_auroc = 0.0
@@ -306,6 +352,16 @@ def parse_args() -> argparse.Namespace:
     exp.add_argument(
         "--output", "-o", type=Path, default=Path("models/phase2_pipeline.joblib"),
         help="Destination path for the InferencePipeline artefact.",
+    )
+    exp.add_argument(
+        "--exclude-models", nargs="*", metavar="MODEL",
+        default=[],
+        help=(
+            "Base model names to drop from the artefact before serialising. "
+            "Common values: random_forest gradient_boosting  "
+            "(reduces artefact from ~2 GB to ~200 MB with negligible AUROC loss). "
+            "Example: --exclude-models random_forest gradient_boosting"
+        ),
     )
     exp.add_argument(
         "--skip-smoke-test", action="store_true",

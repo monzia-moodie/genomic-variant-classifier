@@ -171,8 +171,18 @@ TABULAR_FEATURES = [
     "is_mitochondrial",         # chrom in MT, M
     # GNN-derived score (1) — optional; default 0.5 (ambiguous) when GNN absent
     "gnn_score",                # Graph Attention Network pathogenicity score (0–1)
+    # RNA splice-context features (4) — Phase 6.1; gated by is_splice / severity ≥ 7
+    "maxentscan_score",         # MaxEntScan splice site strength (log-odds); 0.0 = non-splice
+    "dist_to_splice_site",      # distance in bp to nearest splice site; 50 = at boundary
+    "exon_number",              # VEP exon number; 0 = non-exonic / unknown
+    "is_canonical_splice",      # 1 if variant at canonical GT-AG dinucleotide
+    # Protein structure features (4) — Phase 6.2; gated by is_missense
+    "alphafold_plddt",          # AlphaFold pLDDT at mutated residue (0–100); 50 = unknown
+    "solvent_accessibility",    # relative solvent accessibility (0–1); 0.5 = unknown
+    "secondary_structure_context",  # 0=loop, 1=helix, 2=sheet; 0 = unknown
+    "dist_to_active_site",      # Cα distance to nearest active site (Å); 100 = unknown
 ]
-# Total: 6+7+6+9+5+4+2+6+2+3+2+3+1 = 56
+# Total: 6+7+6+9+5+4+2+6+2+3+2+3+1+4+4 = 64
 
 # All planned features have been promoted — PHASE_2_FEATURES is now empty
 PHASE_2_FEATURES: list[str] = []
@@ -340,6 +350,44 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         .fillna(0.5)
         .astype(float)
         .clip(0.0, 1.0)
+    )
+
+    # --- RNA splice-context features (4 features) — Phase 6.1 ---
+    # Defaults: 0.0 / 50 / 0 / 0 for non-splice variants
+    feats["maxentscan_score"] = (
+        df.get("maxentscan_score", pd.Series([0.0] * len(df), index=df.index))
+        .fillna(0.0).astype(float)
+    )
+    feats["dist_to_splice_site"] = (
+        df.get("dist_to_splice_site", pd.Series([50] * len(df), index=df.index))
+        .fillna(50).astype(int)
+    )
+    feats["exon_number"] = (
+        df.get("exon_number", pd.Series([0] * len(df), index=df.index))
+        .fillna(0).astype(int)
+    )
+    feats["is_canonical_splice"] = (
+        df.get("is_canonical_splice", pd.Series([0] * len(df), index=df.index))
+        .fillna(0).astype(int)
+    )
+
+    # --- Protein structure features (4 features) — Phase 6.2 ---
+    # Defaults: 50.0 / 0.5 / 0 / 100.0 for non-missense variants
+    feats["alphafold_plddt"] = (
+        df.get("alphafold_plddt", pd.Series([50.0] * len(df), index=df.index))
+        .fillna(50.0).astype(float).clip(0.0, 100.0)
+    )
+    feats["solvent_accessibility"] = (
+        df.get("solvent_accessibility", pd.Series([0.5] * len(df), index=df.index))
+        .fillna(0.5).astype(float).clip(0.0, 1.0)
+    )
+    feats["secondary_structure_context"] = (
+        df.get("secondary_structure_context", pd.Series([0] * len(df), index=df.index))
+        .fillna(0).astype(int).clip(0, 2)
+    )
+    feats["dist_to_active_site"] = (
+        df.get("dist_to_active_site", pd.Series([100.0] * len(df), index=df.index))
+        .fillna(100.0).astype(float).clip(lower=0.0)
     )
 
     n_nan = feats.isnull().sum().sum()
