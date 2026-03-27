@@ -328,18 +328,28 @@ def main() -> None:
 
     # -----------------------------------------------------------------------
     # Build training ID set for deduplication
+    # variant_ids in splits may carry a "source:" prefix (e.g. "clinvar:17:43:A:T").
+    # Normalise by stripping any non-numeric leading component.
     # -----------------------------------------------------------------------
     train_ids: set[str] = set()
-    for split in ("X_train", "X_val"):
-        f = args.splits_dir / f"{split}.parquet"
-        if f.exists():
-            split_df = pd.read_parquet(f)
-            id_src = "variant_id" if "variant_id" in split_df.columns else None
-            if id_src:
-                train_ids.update(split_df[id_src].astype(str))
-            else:
-                train_ids.update(split_df.index.astype(str))
-    logger.info("Training+val set size (for deduplication): %d", len(train_ids))
+    # Prefer the processed ClinVar parquet (has variant_id without source prefix)
+    clinvar_proc = Path("data/processed/clinvar_grch38.parquet")
+    if clinvar_proc.exists():
+        cv_df = pd.read_parquet(clinvar_proc, columns=["variant_id"])
+        train_ids.update(cv_df["variant_id"].dropna().astype(str))
+        logger.info("Training set variant_ids loaded from processed parquet: %d", len(train_ids))
+    else:
+        # Fall back to split files — strip source prefix if present
+        for split in ("X_train", "X_val"):
+            f = args.splits_dir / f"{split}.parquet"
+            if f.exists():
+                split_df = pd.read_parquet(f)
+                if "variant_id" in split_df.columns:
+                    ids = split_df["variant_id"].astype(str)
+                    # Strip "source:" prefix (e.g. "clinvar:" → "")
+                    ids = ids.str.replace(r"^[a-z]+:", "", regex=True)
+                    train_ids.update(ids)
+        logger.info("Training+val set size (from splits, for deduplication): %d", len(train_ids))
 
     # -----------------------------------------------------------------------
     # Temporal filter (only needed for parquet input; gz already filtered)

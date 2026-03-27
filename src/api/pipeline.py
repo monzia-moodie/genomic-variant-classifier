@@ -187,7 +187,7 @@ class InferencePipeline:
         enriched = df.copy()
 
         # --- Optional GNN scoring (adds gnn_score column) ---
-        if self.gnn_scorer is not None:
+        if getattr(self, "gnn_scorer", None) is not None:
             try:
                 gene_symbols = enriched.get(
                     "gene_symbol",
@@ -238,7 +238,7 @@ class InferencePipeline:
         """
         enriched = df.copy()
 
-        if self.gnn_scorer is not None:
+        if getattr(self, "gnn_scorer", None) is not None:
             try:
                 gene_symbols = enriched.get(
                     "gene_symbol",
