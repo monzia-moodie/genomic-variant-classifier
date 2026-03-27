@@ -203,25 +203,33 @@ class InferencePipeline:
                 enriched["gnn_score"] = 0.5
 
         X = engineer_features(enriched)
+
+        # Determine the actual feature set the trained models expect.
+        # Use the scaler's feature_names_in_ when available (authoritative),
+        # otherwise fall back to INFERENCE_FEATURE_COLUMNS.  This handles
+        # models saved before TABULAR_FEATURES was expanded (e.g. 46 → 64).
+        scaler_features = getattr(self.scaler, "feature_names_in_", None) if self.scaler else None
+        model_features: list[str] = (
+            list(scaler_features) if scaler_features is not None
+            else list(INFERENCE_FEATURE_COLUMNS)
+        )
+
         if self.scaler is not None:
-            # Zero-fill any feature columns the scaler expects but are absent
-            # (happens when input lacks annotation columns such as AlphaMissense).
-            scaler_features = getattr(self.scaler, "feature_names_in_", None)
-            if scaler_features is not None:
-                for col in scaler_features:
-                    if col not in X.columns:
-                        X[col] = 0.0
-                X = X[list(scaler_features)]
+            # Zero-fill columns the scaler expects but are absent from input.
+            for col in model_features:
+                if col not in X.columns:
+                    X[col] = 0.0
             X = pd.DataFrame(
-                self.scaler.transform(X),
-                columns=X.columns,
+                self.scaler.transform(X[model_features]),
+                columns=model_features,
                 index=X.index,
             )
-        # Zero-fill missing inference feature columns
-        for col in INFERENCE_FEATURE_COLUMNS:
-            if col not in X.columns:
-                X[col] = 0.0
-        X_np = X[INFERENCE_FEATURE_COLUMNS].values
+        else:
+            for col in model_features:
+                if col not in X.columns:
+                    X[col] = 0.0
+
+        X_np = X[model_features].values
         base_preds = np.column_stack([
             model.predict_proba(X_np)[:, 1]
             for model in self.trained_models.values()
@@ -264,22 +272,28 @@ class InferencePipeline:
                 enriched["gnn_score"] = 0.5
 
         X = engineer_features(enriched)
+
+        scaler_features = getattr(self.scaler, "feature_names_in_", None) if self.scaler else None
+        model_features: list[str] = (
+            list(scaler_features) if scaler_features is not None
+            else list(INFERENCE_FEATURE_COLUMNS)
+        )
+
         if self.scaler is not None:
-            scaler_features = getattr(self.scaler, "feature_names_in_", None)
-            if scaler_features is not None:
-                for col in scaler_features:
-                    if col not in X.columns:
-                        X[col] = 0.0
-                X = X[list(scaler_features)]
+            for col in model_features:
+                if col not in X.columns:
+                    X[col] = 0.0
             X = pd.DataFrame(
-                self.scaler.transform(X),
-                columns=X.columns,
+                self.scaler.transform(X[model_features]),
+                columns=model_features,
                 index=X.index,
             )
-        for col in INFERENCE_FEATURE_COLUMNS:
-            if col not in X.columns:
-                X[col] = 0.0
-        X_np = X[INFERENCE_FEATURE_COLUMNS].values
+        else:
+            for col in model_features:
+                if col not in X.columns:
+                    X[col] = 0.0
+
+        X_np = X[model_features].values
 
         base_preds = np.column_stack([
             model.predict_proba(X_np)[:, 1]
