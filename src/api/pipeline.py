@@ -204,11 +204,23 @@ class InferencePipeline:
 
         X = engineer_features(enriched)
         if self.scaler is not None:
+            # Zero-fill any feature columns the scaler expects but are absent
+            # (happens when input lacks annotation columns such as AlphaMissense).
+            scaler_features = getattr(self.scaler, "feature_names_in_", None)
+            if scaler_features is not None:
+                for col in scaler_features:
+                    if col not in X.columns:
+                        X[col] = 0.0
+                X = X[list(scaler_features)]
             X = pd.DataFrame(
                 self.scaler.transform(X),
                 columns=X.columns,
                 index=X.index,
             )
+        # Zero-fill missing inference feature columns
+        for col in INFERENCE_FEATURE_COLUMNS:
+            if col not in X.columns:
+                X[col] = 0.0
         X_np = X[INFERENCE_FEATURE_COLUMNS].values
         base_preds = np.column_stack([
             model.predict_proba(X_np)[:, 1]
@@ -253,11 +265,20 @@ class InferencePipeline:
 
         X = engineer_features(enriched)
         if self.scaler is not None:
+            scaler_features = getattr(self.scaler, "feature_names_in_", None)
+            if scaler_features is not None:
+                for col in scaler_features:
+                    if col not in X.columns:
+                        X[col] = 0.0
+                X = X[list(scaler_features)]
             X = pd.DataFrame(
                 self.scaler.transform(X),
                 columns=X.columns,
                 index=X.index,
             )
+        for col in INFERENCE_FEATURE_COLUMNS:
+            if col not in X.columns:
+                X[col] = 0.0
         X_np = X[INFERENCE_FEATURE_COLUMNS].values
 
         base_preds = np.column_stack([
