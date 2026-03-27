@@ -412,6 +412,60 @@ def main() -> None:
     )
 
     # -----------------------------------------------------------------------
+    # Enrich temporal holdout with available annotation sources
+    # Without these, the model scores everything near 0 (all annotation
+    # features zero-filled → model sees only "unknown / benign-looking" input).
+    # -----------------------------------------------------------------------
+    logger.info("Enriching temporal holdout with available annotation sources ...")
+
+    # gnomAD allele frequency
+    gnomad_path = Path("data/processed/gnomad_v4_exomes.parquet")
+    if gnomad_path.exists():
+        gnomad = pd.read_parquet(gnomad_path, columns=["variant_id", "allele_freq"])
+        before = len(labeled)
+        labeled = labeled.merge(gnomad, on="variant_id", how="left")
+        labeled["allele_freq"] = labeled["allele_freq"].fillna(0.0)
+        logger.info("  gnomAD AF joined: %.1f%% hit rate",
+                    100 * labeled["allele_freq"].gt(0).mean())
+        del gnomad
+
+    # Gene-level features from gene_summary (n_pathogenic_in_gene, constraint)
+    gene_summary_path = Path("data/processed/gene_summary.parquet")
+    if gene_summary_path.exists() and "gene_symbol" in labeled.columns:
+        gs = pd.read_parquet(gene_summary_path)
+        labeled = labeled.merge(gs, on="gene_symbol", how="left")
+        if "n_pathogenic_in_gene" in labeled.columns:
+            labeled["n_pathogenic_in_gene"] = labeled["n_pathogenic_in_gene"].fillna(0)
+        if "gene_constraint_oe" in labeled.columns:
+            labeled["gene_constraint_oe"] = labeled["gene_constraint_oe"].fillna(1.0)
+        if "has_uniprot_annotation" in labeled.columns:
+            labeled["has_uniprot_annotation"] = labeled["has_uniprot_annotation"].fillna(0)
+        logger.info("  gene_summary joined: %d unique gene_symbols matched",
+                    int(labeled["gene_symbol"].isin(gs["gene_symbol"]).sum()))
+        del gs
+
+    # AlphaMissense scores (if connector available and index built)
+    am_parquet = Path("data/processed/alphamissense_scores.parquet")
+    if not am_parquet.exists():
+        am_parquet = Path("data/external/alphamissense/AlphaMissense_hg38.tsv.gz")
+    if am_parquet.exists():
+        try:
+            from src.data.alphamissense import AlphaMissenseConnector
+            am = AlphaMissenseConnector(tsv_path=str(am_parquet))
+            am_df = am.fetch(labeled)
+            if "alphamissense_score" in am_df.columns:
+                labeled["alphamissense_score"] = am_df["alphamissense_score"].values
+                logger.info(
+                    "  AlphaMissense joined: %.1f%% hit rate",
+                    100 * labeled["alphamissense_score"].notna().mean(),
+                )
+        except Exception as exc:
+            logger.warning("  AlphaMissense enrichment skipped: %s", exc)
+
+    logger.info("Enrichment complete. Enriched columns: %s",
+                [c for c in labeled.columns if c not in ("variant_id","chrom","pos","ref","alt","label","clinical_sig","LastEvaluated")][:15])
+
+    # -----------------------------------------------------------------------
     # Score in batches to avoid OOM in engineer_features at 2M+ scale
     # -----------------------------------------------------------------------
     BATCH = 50_000
