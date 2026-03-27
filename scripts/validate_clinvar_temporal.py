@@ -105,87 +105,116 @@ def _download_variant_summary(dest: Path) -> None:
     logger.info("Downloaded to %s (%d MB)", dest, dest.stat().st_size // 1_000_000)
 
 
-def _load_variant_summary(path: Path) -> pd.DataFrame:
+def _load_variant_summary(path: Path, cutoff: str = "2000-01-01") -> pd.DataFrame:
     """
     Parse ClinVar variant_summary.txt.gz into a DataFrame with columns:
       variant_id, chrom, pos, ref, alt, label, gene_symbol, LastEvaluated,
-      clinical_significance
-    Filters to GRCh38, biallelic SNV/indel, ClinSigSimple in {0, 1}.
+      clinical_sig
+    Filters to GRCh38, biallelic SNV/indel, ClinSigSimple in {0, 1},
+    and LastEvaluated > cutoff.  Uses chunked reading to handle multi-GB files.
     """
-    logger.info("Parsing %s ...", path)
+    logger.info("Parsing %s (chunked) ...", path)
     opener = gzip.open if str(path).endswith(".gz") else open
+
+    # Read header first to get column names and detect schema
     with opener(path, "rt", encoding="utf-8", errors="replace") as f:
-        df = pd.read_csv(
+        raw_header = f.readline().rstrip("\n")
+    col_names = [c.lstrip("#") for c in raw_header.split("\t")]
+
+    ref_col = "ReferenceAlleleVCF" if "ReferenceAlleleVCF" in col_names else "ReferenceAllele"
+    alt_col = "AlternateAlleleVCF" if "AlternateAlleleVCF" in col_names else "AlternateAllele"
+    pos_col = "PositionVCF"        if "PositionVCF"        in col_names else "Start"
+
+    keep_raw = list({
+        "Assembly", "Chromosome", pos_col, ref_col, alt_col,
+        "ClinSigSimple", "LastEvaluated", "GeneSymbol", "ClinicalSignificance",
+    } & set(col_names))
+
+    cutoff_dt = pd.Timestamp(cutoff)
+    chunks: list[pd.DataFrame] = []
+
+    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
+        reader = pd.read_csv(
             f,
             sep="\t",
-            low_memory=False,
+            header=0,
+            names=col_names,
+            usecols=keep_raw,
+            dtype=str,
+            chunksize=200_000,
             on_bad_lines="skip",
         )
+        for i, chunk in enumerate(reader):
+            # GRCh38 only
+            chunk = chunk[chunk["Assembly"].str.upper() == "GRCH38"]
+            if chunk.empty:
+                continue
 
-    logger.info("Raw rows: %d, columns: %d", len(df), len(df.columns))
+            # Binary label
+            chunk["ClinSigSimple"] = pd.to_numeric(chunk["ClinSigSimple"], errors="coerce")
+            chunk = chunk[chunk["ClinSigSimple"].isin([0, 1])]
+            if chunk.empty:
+                continue
 
-    # Rename leading '#' from first column
-    df.columns = [c.lstrip("#") for c in df.columns]
+            # Date filter (fast string-based pre-check, then proper parse for kept rows)
+            if "LastEvaluated" in chunk.columns:
+                chunk["LastEvaluated"] = pd.to_datetime(
+                    chunk["LastEvaluated"], errors="coerce", format="mixed"
+                )
+                chunk = chunk[chunk["LastEvaluated"] > cutoff_dt]
+                if chunk.empty:
+                    continue
 
-    # Filter to GRCh38
-    df = df[df["Assembly"].str.upper() == "GRCH38"].copy()
-    logger.info("After GRCh38 filter: %d rows", len(df))
+            # Allele filters
+            ref_s = chunk[ref_col].astype(str)
+            alt_s = chunk[alt_col].astype(str)
+            mask = (
+                ref_s.notna() & alt_s.notna()
+                & ~ref_s.isin(["na", ".", "N", "-", "nan"])
+                & ~alt_s.isin(["na", ".", "N", "-", "nan"])
+                & (ref_s.str.len() <= 50)
+                & (alt_s.str.len() <= 50)
+            )
+            chunk = chunk[mask]
+            if chunk.empty:
+                continue
 
-    # Use VCF-normalised alleles where available, fall back to ReferenceAllele/AlternateAllele
-    ref_col = "ReferenceAlleleVCF" if "ReferenceAlleleVCF" in df.columns else "ReferenceAllele"
-    alt_col = "AlternateAlleleVCF" if "AlternateAlleleVCF" in df.columns else "AlternateAllele"
-    pos_col = "PositionVCF"        if "PositionVCF"        in df.columns else "Start"
+            # Normalise
+            chunk["chrom"] = (
+                chunk["Chromosome"].astype(str)
+                .str.replace("chr", "", regex=False)
+                .str.strip()
+            )
+            chunk.loc[chunk["chrom"] == "M", "chrom"] = "MT"
+            chunk["pos"]   = pd.to_numeric(chunk[pos_col], errors="coerce")
+            chunk["ref"]   = ref_s.str.upper()
+            chunk["alt"]   = alt_s.str.upper()
+            chunk["label"] = chunk["ClinSigSimple"].astype(int)
+            chunk["gene_symbol"]  = chunk.get("GeneSymbol", pd.Series("", index=chunk.index)).astype(str).str.strip()
+            chunk["clinical_sig"] = chunk.get("ClinicalSignificance", pd.Series("", index=chunk.index)).astype(str)
 
-    # Drop CNVs / structural variants (ref or alt is 'na', '.', or >50 bp)
-    df = df[
-        df[ref_col].notna() & df[alt_col].notna()
-        & ~df[ref_col].isin(["na", ".", "N", "-"])
-        & ~df[alt_col].isin(["na", ".", "N", "-"])
-        & (df[ref_col].astype(str).str.len() <= 50)
-        & (df[alt_col].astype(str).str.len() <= 50)
-    ].copy()
+            chunk = chunk.dropna(subset=["pos"])
+            chunk["pos"] = chunk["pos"].astype(int)
+            chunk["variant_id"] = (
+                chunk["chrom"] + ":" + chunk["pos"].astype(str) + ":"
+                + chunk["ref"]  + ":" + chunk["alt"]
+            )
 
-    # Binary labels from ClinSigSimple
-    df["ClinSigSimple"] = pd.to_numeric(df["ClinSigSimple"], errors="coerce")
-    df = df[df["ClinSigSimple"].isin([0, 1])].copy()
-    df["label"] = df["ClinSigSimple"].astype(int)
+            keep = ["variant_id", "chrom", "pos", "ref", "alt", "label",
+                    "gene_symbol", "LastEvaluated", "clinical_sig"]
+            chunks.append(chunk[[c for c in keep if c in chunk.columns]])
 
-    # Normalise chromosome
-    df["chrom"] = (
-        df["Chromosome"].astype(str)
-        .str.replace("chr", "", regex=False)
-        .str.replace("Chr", "", regex=False)
-        .str.strip()
-    )
-    df.loc[df["chrom"] == "M", "chrom"] = "MT"
+            if (i + 1) % 5 == 0:
+                n_so_far = sum(len(c) for c in chunks)
+                logger.info("  Chunk %d processed — %d variants kept so far", i + 1, n_so_far)
 
-    df["pos"] = pd.to_numeric(df[pos_col], errors="coerce").astype("Int64")
-    df["ref"] = df[ref_col].astype(str).str.upper()
-    df["alt"] = df[alt_col].astype(str).str.upper()
+    if not chunks:
+        logger.error("No qualifying variants found in %s", path)
+        raise SystemExit(1)
 
-    df = df.dropna(subset=["pos", "ref", "alt"]).copy()
-    df["pos"] = df["pos"].astype(int)
-    df["variant_id"] = (
-        df["chrom"].astype(str) + ":"
-        + df["pos"].astype(str) + ":"
-        + df["ref"] + ":"
-        + df["alt"]
-    )
-
-    # Parse LastEvaluated date
-    df["LastEvaluated"] = pd.to_datetime(df["LastEvaluated"], errors="coerce", format="mixed")
-
-    # Gene symbol
-    df["gene_symbol"] = df["GeneSymbol"].astype(str).str.strip() if "GeneSymbol" in df.columns else ""
-
-    # Clinical significance text
-    df["clinical_sig"] = df["ClinicalSignificance"].astype(str) if "ClinicalSignificance" in df.columns else ""
-
-    keep = ["variant_id", "chrom", "pos", "ref", "alt", "label",
-            "gene_symbol", "LastEvaluated", "clinical_sig"]
-    result = df[[c for c in keep if c in df.columns]].drop_duplicates(subset=["variant_id"])
+    result = pd.concat(chunks, ignore_index=True).drop_duplicates(subset=["variant_id"])
     logger.info(
-        "Parsed: %d biallelic SNV/indel GRCh38 variants "
+        "Parsed: %d biallelic SNV/indel GRCh38 variants after cutoff "
         "(%d pathogenic, %d benign)",
         len(result), int(result["label"].sum()), int((result["label"] == 0).sum()),
     )
@@ -283,8 +312,11 @@ def main() -> None:
     # -----------------------------------------------------------------------
     suffix = clinvar_path.suffix.lower()
     if suffix in (".gz", ".tsv", ".txt") or clinvar_path.name.endswith(".txt.gz"):
-        clinvar = _load_variant_summary(clinvar_path)
+        # Chunked parser does date filtering internally — pass cutoff to avoid
+        # loading all 4M+ rows into memory before the temporal split.
+        clinvar = _load_variant_summary(clinvar_path, cutoff=args.cutoff)
         date_col = "LastEvaluated"
+        already_filtered = True
     else:
         clinvar = _load_clinvar_parquet(clinvar_path)
         date_col = next(
@@ -292,6 +324,7 @@ def main() -> None:
                          "date_last_evaluated") if c in clinvar.columns),
             None,
         )
+        already_filtered = False
 
     # -----------------------------------------------------------------------
     # Build training ID set for deduplication
@@ -309,9 +342,11 @@ def main() -> None:
     logger.info("Training+val set size (for deduplication): %d", len(train_ids))
 
     # -----------------------------------------------------------------------
-    # Temporal filter
+    # Temporal filter (only needed for parquet input; gz already filtered)
     # -----------------------------------------------------------------------
-    if date_col and date_col in clinvar.columns:
+    if already_filtered:
+        new_variants = clinvar
+    elif date_col and date_col in clinvar.columns:
         clinvar[date_col] = pd.to_datetime(clinvar[date_col], errors="coerce")
         new_variants = clinvar[clinvar[date_col] > args.cutoff].copy()
         logger.info("Variants last-evaluated after %s: %d", args.cutoff, len(new_variants))
