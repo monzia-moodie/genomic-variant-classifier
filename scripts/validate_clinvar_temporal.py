@@ -299,23 +299,12 @@ def main() -> None:
         clinvar_path = fresh_gz
 
     # -----------------------------------------------------------------------
-    # Load model
-    # -----------------------------------------------------------------------
-    logger.info("Loading model from %s ...", args.model)
-    from src.api.pipeline import InferencePipeline
-    pipeline = InferencePipeline.load(args.model)
-    logger.info("Model val_auroc=%.4f, n_features=%d",
-                pipeline.metadata.val_auroc, pipeline.metadata.n_features)
-
-    # -----------------------------------------------------------------------
-    # Load ClinVar data
+    # Load ClinVar data  (model loaded later, after annotation DFs are freed)
     # -----------------------------------------------------------------------
     suffix = clinvar_path.suffix.lower()
     if suffix in (".gz", ".tsv", ".txt") or clinvar_path.name.endswith(".txt.gz"):
-        # Chunked parser does date filtering internally — pass cutoff to avoid
-        # loading all 4M+ rows into memory before the temporal split.
+        # Chunked parser filters by date internally — low peak memory.
         clinvar = _load_variant_summary(clinvar_path, cutoff=args.cutoff)
-        date_col = "LastEvaluated"
         already_filtered = True
     else:
         clinvar = _load_clinvar_parquet(clinvar_path)
@@ -327,32 +316,7 @@ def main() -> None:
         already_filtered = False
 
     # -----------------------------------------------------------------------
-    # Build training ID set for deduplication
-    # variant_ids in splits may carry a "source:" prefix (e.g. "clinvar:17:43:A:T").
-    # Normalise by stripping any non-numeric leading component.
-    # -----------------------------------------------------------------------
-    train_ids: set[str] = set()
-    # Prefer the processed ClinVar parquet (has variant_id without source prefix)
-    clinvar_proc = Path("data/processed/clinvar_grch38.parquet")
-    if clinvar_proc.exists():
-        cv_df = pd.read_parquet(clinvar_proc, columns=["variant_id"])
-        train_ids.update(cv_df["variant_id"].dropna().astype(str))
-        logger.info("Training set variant_ids loaded from processed parquet: %d", len(train_ids))
-    else:
-        # Fall back to split files — strip source prefix if present
-        for split in ("X_train", "X_val"):
-            f = args.splits_dir / f"{split}.parquet"
-            if f.exists():
-                split_df = pd.read_parquet(f)
-                if "variant_id" in split_df.columns:
-                    ids = split_df["variant_id"].astype(str)
-                    # Strip "source:" prefix (e.g. "clinvar:" → "")
-                    ids = ids.str.replace(r"^[a-z]+:", "", regex=True)
-                    train_ids.update(ids)
-        logger.info("Training+val set size (from splits, for deduplication): %d", len(train_ids))
-
-    # -----------------------------------------------------------------------
-    # Temporal filter (only needed for parquet input; gz already filtered)
+    # Temporal filter (parquet path only; gz is already date-filtered)
     # -----------------------------------------------------------------------
     if already_filtered:
         new_variants = clinvar
@@ -360,31 +324,36 @@ def main() -> None:
         clinvar[date_col] = pd.to_datetime(clinvar[date_col], errors="coerce")
         new_variants = clinvar[clinvar[date_col] > args.cutoff].copy()
         logger.info("Variants last-evaluated after %s: %d", args.cutoff, len(new_variants))
+        del clinvar
     else:
         logger.warning(
             "No date column found -- using all %d variants (no temporal split).", len(clinvar)
         )
         new_variants = clinvar.copy()
+        del clinvar
 
     # -----------------------------------------------------------------------
-    # Deduplicate against training set
-    # For gz input, temporal filtering already excludes training data; skip
-    # the isin check (which is O(n*m) and OOM-prone at 2M+ x 4M+ scale).
+    # Deduplicate against training set (parquet path only)
+    # For gz input the temporal cutoff already excludes training data;
+    # loading clinvar_grch38.parquet (4.4M rows) would exhaust RAM before
+    # the model can be loaded.
     # -----------------------------------------------------------------------
-    if not already_filtered and "variant_id" in new_variants.columns and train_ids:
-        before = len(new_variants)
-        # Convert to regular Python strings via list to avoid Arrow memory spike
-        vid_list = new_variants["variant_id"].tolist()
-        keep_mask = [v not in train_ids for v in vid_list]
-        new_variants = new_variants[keep_mask].copy()
-        logger.info(
-            "After removing training overlap: %d (removed %d)",
-            len(new_variants), before - len(new_variants),
-        )
+    if not already_filtered:
+        train_ids: set[str] = set()
+        clinvar_proc = Path("data/processed/clinvar_grch38.parquet")
+        if clinvar_proc.exists():
+            cv_df = pd.read_parquet(clinvar_proc, columns=["variant_id"])
+            train_ids.update(cv_df["variant_id"].dropna().astype(str))
+            del cv_df
+            logger.info("Training set variant_ids: %d", len(train_ids))
+        if train_ids and "variant_id" in new_variants.columns:
+            before = len(new_variants)
+            keep_mask = [v not in train_ids for v in new_variants["variant_id"].tolist()]
+            new_variants = new_variants[keep_mask].copy()
+            logger.info("After dedup: %d (removed %d)", len(new_variants), before - len(new_variants))
+        del train_ids
     else:
-        logger.info(
-            "Temporal filter guarantees no training overlap — skipping variant_id dedup."
-        )
+        logger.info("Temporal filter guarantees no training overlap — skipping variant_id dedup.")
 
     # -----------------------------------------------------------------------
     # Resolve label column
@@ -399,6 +368,7 @@ def main() -> None:
         raise SystemExit(1)
 
     labeled = new_variants[new_variants[label_col].isin([0, 1])].copy()
+    del new_variants
     if len(labeled) < 50:
         logger.error("Only %d labeled variants after cutoff — too few to evaluate.", len(labeled))
         raise SystemExit(1)
@@ -412,39 +382,32 @@ def main() -> None:
     )
 
     # -----------------------------------------------------------------------
-    # Enrich temporal holdout with available annotation sources
-    # Without these, the model scores everything near 0 (all annotation
-    # features zero-filled → model sees only "unknown / benign-looking" input).
+    # Enrich with annotation sources BEFORE loading the model.
+    # The model (RandomForest) is large; annotation DFs must be freed first
+    # to avoid OOM during joblib.load().
     # -----------------------------------------------------------------------
     logger.info("Enriching temporal holdout with available annotation sources ...")
 
-    # gnomAD allele frequency
     gnomad_path = Path("data/processed/gnomad_v4_exomes.parquet")
     if gnomad_path.exists():
         gnomad = pd.read_parquet(gnomad_path, columns=["variant_id", "allele_freq"])
-        before = len(labeled)
         labeled = labeled.merge(gnomad, on="variant_id", how="left")
         labeled["allele_freq"] = labeled["allele_freq"].fillna(0.0)
-        logger.info("  gnomAD AF joined: %.1f%% hit rate",
-                    100 * labeled["allele_freq"].gt(0).mean())
+        logger.info("  gnomAD AF: %.1f%% hit rate", 100 * labeled["allele_freq"].gt(0).mean())
         del gnomad
 
-    # Gene-level features from gene_summary (n_pathogenic_in_gene, constraint)
     gene_summary_path = Path("data/processed/gene_summary.parquet")
     if gene_summary_path.exists() and "gene_symbol" in labeled.columns:
         gs = pd.read_parquet(gene_summary_path)
         labeled = labeled.merge(gs, on="gene_symbol", how="left")
-        if "n_pathogenic_in_gene" in labeled.columns:
-            labeled["n_pathogenic_in_gene"] = labeled["n_pathogenic_in_gene"].fillna(0)
-        if "gene_constraint_oe" in labeled.columns:
-            labeled["gene_constraint_oe"] = labeled["gene_constraint_oe"].fillna(1.0)
-        if "has_uniprot_annotation" in labeled.columns:
-            labeled["has_uniprot_annotation"] = labeled["has_uniprot_annotation"].fillna(0)
-        logger.info("  gene_summary joined: %d unique gene_symbols matched",
+        for col, fill in [("n_pathogenic_in_gene", 0), ("gene_constraint_oe", 1.0),
+                          ("has_uniprot_annotation", 0)]:
+            if col in labeled.columns:
+                labeled[col] = labeled[col].fillna(fill)
+        logger.info("  gene_summary: %d gene_symbols matched",
                     int(labeled["gene_symbol"].isin(gs["gene_symbol"]).sum()))
         del gs
 
-    # AlphaMissense scores (if connector available and index built)
     am_parquet = Path("data/processed/alphamissense_scores.parquet")
     if not am_parquet.exists():
         am_parquet = Path("data/external/alphamissense/AlphaMissense_hg38.tsv.gz")
@@ -455,15 +418,23 @@ def main() -> None:
             am_df = am.fetch(labeled)
             if "alphamissense_score" in am_df.columns:
                 labeled["alphamissense_score"] = am_df["alphamissense_score"].values
-                logger.info(
-                    "  AlphaMissense joined: %.1f%% hit rate",
-                    100 * labeled["alphamissense_score"].notna().mean(),
-                )
+                logger.info("  AlphaMissense: %.1f%% hit rate",
+                            100 * labeled["alphamissense_score"].notna().mean())
         except Exception as exc:
-            logger.warning("  AlphaMissense enrichment skipped: %s", exc)
+            logger.warning("  AlphaMissense skipped: %s", exc)
 
-    logger.info("Enrichment complete. Enriched columns: %s",
-                [c for c in labeled.columns if c not in ("variant_id","chrom","pos","ref","alt","label","clinical_sig","LastEvaluated")][:15])
+    import gc; gc.collect()
+    logger.info("Enrichment complete. Labeled DataFrame: %d rows x %d cols",
+                len(labeled), len(labeled.columns))
+
+    # -----------------------------------------------------------------------
+    # Load model (after annotation DFs freed)
+    # -----------------------------------------------------------------------
+    logger.info("Loading model from %s ...", args.model)
+    from src.api.pipeline import InferencePipeline
+    pipeline = InferencePipeline.load(args.model)
+    logger.info("Model val_auroc=%.4f, n_features=%d",
+                pipeline.metadata.val_auroc, pipeline.metadata.n_features)
 
     # -----------------------------------------------------------------------
     # Score in batches to avoid OOM in engineer_features at 2M+ scale
