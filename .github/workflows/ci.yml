@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/genomic-variant-api
+  IMAGE_NAME: ${{ github.repository_owner }}/genomic-variant-classifier
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ jobs:
           else
             pip install -r requirements.txt -r requirements-api.txt
           fi
-          pip install pytest pytest-cov
+          pip install -r requirements-dev.txt httpx seaborn jinja2
 
       - name: Run unit tests
         run: |
@@ -157,3 +157,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+
+
