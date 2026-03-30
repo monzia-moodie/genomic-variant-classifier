@@ -531,7 +531,7 @@ class TestInfoEndpoint:
         assert body["pipeline_version"]  == "1.0.0"
         assert body["training_auroc"]    == pytest.approx(0.9780)
         assert body["n_features"]        == 64
-        assert len(body["feature_names"]) == 64
+        assert len(body["feature_names"]) == 69
         # Phase 4: all features promoted, phase2_features_remaining is now empty
         assert isinstance(body["phase2_features_remaining"], list)
 
