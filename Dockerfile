@@ -45,7 +45,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # ----------------------------------------------------------------------------
 # Stage 1 — dependency builder
 # ----------------------------------------------------------------------------
-FROM python:${PYTHON_VERSION}-slim AS builder
+FROM python:3.11-slim-bookworm@sha256:9358444059ed78e2975ada2c189f1c1a3144a5dab6f35bff8c981afb38946634 AS builder
 
 WORKDIR /build
 
@@ -123,7 +123,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # gunicorn with uvicorn workers for async FastAPI
 CMD ["sh", "-c", \
-     "gunicorn src.api.main:app \
+     "/opt/venv/bin/gunicorn src.api.main:app \
         -k uvicorn.workers.UvicornWorker \
         --bind 0.0.0.0:${PORT} \
         --workers ${WORKERS} \
@@ -163,6 +163,7 @@ CMD ["python", "scripts/run_phase2_eval.py", \
      "--skip-nn", "--skip-svm", \
      "--min-review-tier", "2", \
      "--output",        "outputs/latest"]
+
 
 
 
