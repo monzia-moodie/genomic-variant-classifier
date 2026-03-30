@@ -68,10 +68,10 @@ COPY requirements.txt requirements-api.txt requirements-api.lock* ./
 RUN /opt/venv/bin/pip install --upgrade pip \
     && if [ -f requirements-api.lock ]; then \
          echo "Using frozen lockfile requirements-api.lock"; \
-         pip install --no-cache-dir -r requirements-api.lock; \
+         /opt/venv/bin/pip install --no-cache-dir -r requirements-api.lock; \
        else \
          echo "WARNING: no lockfile found — using loose pins from requirements-api.txt"; \
-         pip install --no-cache-dir -r requirements-api.txt; \
+         /opt/venv/bin/pip install --no-cache-dir -r requirements-api.txt; \
        fi
 
 
@@ -164,6 +164,8 @@ CMD ["python", "scripts/run_phase2_eval.py", \
      "--skip-nn", "--skip-svm", \
      "--min-review-tier", "2", \
      "--output",        "outputs/latest"]
+
+
 
 
 
