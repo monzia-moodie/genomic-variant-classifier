@@ -1,0 +1,16 @@
+{
+  "artifact": "phase2_pipeline.joblib",
+  "created_at": "2026-03-30T14:39:17.459740+00:00",
+  "python": "3.14.3",
+  "platform": "Windows-11-10.0.29553-SP0",
+  "libraries": {
+    "numpy": "2.4.4",
+    "scikit-learn": "1.8.0",
+    "catboost": "1.2.10",
+    "lightgbm": "4.6.0",
+    "xgboost": "3.2.0",
+    "joblib": "1.5.3",
+    "pandas": "3.0.1",
+    "scipy": "1.17.1"
+  }
+}
