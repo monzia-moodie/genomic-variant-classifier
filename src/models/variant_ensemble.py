@@ -64,14 +64,14 @@ from sklearn.svm import SVC
 import xgboost as xgb
 import lightgbm as lgb
 
+logger = logging.getLogger(__name__)
+
 try:
     from src.models.catboost_wrapper import CatBoostVariantClassifier as _CatBoostVC
     _CATBOOST_AVAILABLE = True
 except ImportError:
     _CATBOOST_AVAILABLE = False
     logger.debug("catboost not installed — catboost base model will be skipped.")
-
-logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # ---------------------------------------------------------------------------
@@ -188,8 +188,14 @@ TABULAR_FEATURES = [
     "solvent_accessibility",    # relative solvent accessibility (0–1); 0.5 = unknown
     "secondary_structure_context",  # 0=loop, 1=helix, 2=sheet; 0 = unknown
     "dist_to_active_site",      # Cα distance to nearest active site (Å); 100 = unknown
+    # Population-stratified allele frequencies (1KGP) (5)
+    "af_1kg_afr",           # 1KGP African AF
+    "af_1kg_eur",           # 1KGP European AF
+    "af_1kg_eas",           # 1KGP East Asian AF
+    "af_1kg_sas",           # 1KGP South Asian AF
+    "af_1kg_amr",           # 1KGP Admixed American AF
 ]
-# Total: 6+7+6+9+5+4+2+6+2+3+2+3+1+4+4 = 64
+# Total: 6+7+6+9+5+4+2+6+2+3+2+3+1+4+4+5 = 69
 
 # All planned features have been promoted -- PHASE_2_FEATURES is now empty
 PHASE_2_FEATURES: list[str] = []
@@ -410,6 +416,10 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         .fillna(100.0).astype(float).clip(lower=0.0)
     )
 
+    # --- Population-stratified allele frequencies (1KGP) (5 features) ---
+    for col in ("af_1kg_afr", "af_1kg_eur", "af_1kg_eas", "af_1kg_sas", "af_1kg_amr"):
+        feats[col] = df.get(col, pd.Series([0.0] * len(df), index=df.index)).fillna(0.0).astype(float).clip(lower=0)
+
     n_nan = feats.isnull().sum().sum()
     if n_nan > 0:
         logger.warning("%d NaN values in feature matrix — filling with 0.", n_nan)
@@ -612,7 +622,9 @@ class TabularNNClassifier(BaseEstimator, ClassifierMixin):
 
 def _write_model_manifest(artifact_path):
     """Write a JSON manifest recording the library versions used to create this artifact."""
-    import json, platform, importlib.metadata
+    import json
+    import platform
+    import importlib.metadata
     from datetime import datetime, timezone
     artifact_path = Path(artifact_path)
     libraries = [
