@@ -12,21 +12,34 @@ Run:
     python scripts/train.py
 
 Or with explicit paths:
-    python scripts/train.py \\
-        --clinvar  data/processed/clinvar_grch38.parquet \\
-        --gnomad   data/processed/gnomad_enriched.parquet \\
+    python scripts/train.py \
+        --clinvar  data/processed/clinvar_grch38.parquet \
+        --gnomad   data/processed/gnomad_v4_exomes.parquet \
         --out-dir  models/v1
 
-The first run takes 5–15 minutes depending on dataset size and CPU count.
+With optional annotation sources:
+    python scripts/train.py \
+        --clinvar        data/processed/clinvar_grch38.parquet \
+        --gnomad         data/processed/gnomad_v4_exomes.parquet \
+        --alphamissense  data/raw/cache/alphamissense_scores_hg38.parquet \
+        --lovd-path      data/external/lovd/lovd_all_variants.parquet \
+        --out-dir        models/v1 \
+        --skip-svm
+
+The first run takes 5-15 minutes depending on dataset size and CPU count.
 
 CHANGES FROM PHASE 1:
-  - Was a bare string literal (Bug 3 fixed — now a real executable script).
+  - Was a bare string literal (Bug 3 fixed -- now a real executable script).
   - Imported VariantEnsemble from src.models.ensemble but that module only
     exports EnsembleClassifier. VariantEnsemble is in variant_ensemble.py
     (Bug 5 fixed).
   - logging.basicConfig is now called only here, before any other imports
     that might emit log messages (Issue L).
   - from __future__ import annotations added (Issue N).
+
+CHANGES -- LOVD + AlphaMissense integration:
+  - --alphamissense-path argument added; wired into AnnotationConfig
+  - --lovd-path argument added; wired into AnnotationConfig
 """
 
 from __future__ import annotations
@@ -41,7 +54,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# ── Logging must be configured before any pipeline imports ─────────────────
+# -- Logging must be configured before any pipeline imports -----------------
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -79,6 +92,32 @@ def parse_args() -> argparse.Namespace:
         help="Optional processed UniProt parquet for protein features",
     )
     p.add_argument(
+        "--alphamissense",
+        default=None,
+        metavar="PATH",
+        help=(
+            "AlphaMissense scores parquet (alphamissense_scores_hg38.parquet). "
+            "Improves AUROC for missense-heavy genes (PTEN, TP53, MSH2). "
+            "Default: None (stub mode, score=0.5 for all variants)."
+        ),
+    )
+    p.add_argument(
+        "--lovd-path",
+        default=None,
+        metavar="PATH",
+        help=(
+            "LOVD all-variants parquet (data/external/lovd/lovd_all_variants.parquet). "
+            "Adds lovd_variant_class feature (ordinal 0-4). "
+            "Default: None (stub mode, lovd_variant_class=0 for all variants)."
+        ),
+    )
+    p.add_argument(
+        "--skip-svm",
+        action="store_true",
+        default=False,
+        help="Exclude SVM from ensemble (recommended for datasets > 100K samples).",
+    )
+    p.add_argument(
         "--out-dir",
         default="models/v1",
         help="Output directory for saved models, metrics, and reports",
@@ -107,10 +146,11 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
 
-    # ── 1. Data preparation ─────────────────────────────────────────────────
-    logger.info("━━━━ PHASE 1: Data Preparation ━━━━")
+    # -- 1. Data preparation ------------------------------------------------
+    logger.info("PHASE 1: Data Preparation")
 
     from src.data.real_data_prep import (
+        AnnotationConfig,
         DataPrepConfig,
         DataPrepPipeline,
         BENIGN_TERMS,
@@ -140,8 +180,14 @@ def main() -> None:
         scale_features=True,
         output_dir=out_dir / "splits",
     )
-    pipeline = DataPrepPipeline(config=config)
-    X_train, X_test, y_train, y_test, meta_test = pipeline.run(
+
+    annotation_config = AnnotationConfig(
+        alphamissense_path=Path(args.alphamissense) if args.alphamissense else None,
+        lovd_path=Path(args.lovd_path) if args.lovd_path else None,
+    )
+
+    pipeline = DataPrepPipeline(config=config, annotation_config=annotation_config)
+    X_train, X_val, X_test, y_train, y_val, y_test, meta_val, meta_test = pipeline.run(
         clinvar_path=str(enriched_path),
         gnomad_path=args.gnomad,
         uniprot_path=args.uniprot,
@@ -153,7 +199,7 @@ def main() -> None:
     )
     logger.info(
         "Test:  %d variants (%d pathogenic, %.1f%%)",
-        len(X_test),  int(y_test.sum()),  y_test.mean() * 100,
+        len(X_test), int(y_test.sum()), y_test.mean() * 100,
     )
 
     class_weights = pipeline.get_class_weights(y_train)
@@ -161,12 +207,9 @@ def main() -> None:
     feature_names = list(X_train.columns)
     logger.info("Feature dimensionality: %d", len(feature_names))
 
-    # ── 2. Build and configure ensemble ────────────────────────────────────
-    logger.info("━━━━ PHASE 2: Model Configuration ━━━━")
+    # -- 2. Build and configure ensemble ------------------------------------
+    logger.info("PHASE 2: Model Configuration")
 
-    # CHANGE: original script imported VariantEnsemble from src.models.ensemble
-    # but that module only exports EnsembleClassifier. VariantEnsemble lives
-    # in src.models.variant_ensemble (Bug 5 fixed).
     from src.models.variant_ensemble import EnsembleConfig, VariantEnsemble
 
     ensemble_config = EnsembleConfig(
@@ -176,6 +219,7 @@ def main() -> None:
         class_weight="balanced",
         n_jobs=-1,
         model_dir=out_dir,
+        skip_svm=args.skip_svm,
     )
     ensemble = VariantEnsemble(config=ensemble_config)
 
@@ -184,57 +228,79 @@ def main() -> None:
         logger.info("Fast mode: 50 estimators per tree model.")
 
     if args.skip_nn:
-        for key in ("tabular_nn", "cnn_1d"):
+        for key in ("tabular_nn", "cnn_1d", "mc_dropout", "deep_ensemble"):
             ensemble.base_estimators.pop(key, None)
         logger.info("Skipping neural network models (--skip-nn).")
 
     logger.info("Models to train: %s", list(ensemble.base_estimators.keys()))
 
-    # ── 3. Handle sequence data for CNN ────────────────────────────────────
+    # -- 3. Handle sequence data for CNN ------------------------------------
     has_sequences = (
         "fasta_seq" in raw_df.columns
         and raw_df["fasta_seq"].notna().sum() > 100
     )
     if not has_sequences:
-        logger.info("No sequence data — removing CNN from ensemble.")
+        logger.info("No sequence data -- removing CNN from ensemble.")
         ensemble.base_estimators.pop("cnn_1d", None)
         placeholder_seq = pd.Series(["A" * 101] * len(y_train))
-        X_seq_train, X_seq_test = placeholder_seq, pd.Series(["A" * 101] * len(y_test))
+        X_seq_train = placeholder_seq
+        X_seq_test  = pd.Series(["A" * 101] * len(y_test))
     else:
         X_seq_train = raw_df["fasta_seq"].iloc[: len(y_train)].reset_index(drop=True)
         X_seq_test  = raw_df["fasta_seq"].iloc[: len(y_test)].reset_index(drop=True)
 
-    # ── 4. Train ────────────────────────────────────────────────────────────
-    logger.info("━━━━ PHASE 3: Training ━━━━")
+    # -- 4. Train -----------------------------------------------------------
+    logger.info("PHASE 3: Training")
     ensemble.fit(X_train, X_seq_train, y_train)
 
-    # ── 5. Evaluate ─────────────────────────────────────────────────────────
-    logger.info("━━━━ PHASE 4: Evaluation ━━━━")
+    # -- 5. Evaluate --------------------------------------------------------
+    logger.info("PHASE 4: Evaluation")
     metrics_df = ensemble.evaluate(X_test, X_seq_test, y_test)
     logger.info("\n%s", metrics_df.to_string())
 
-    # Clinical evaluation (deeper metrics)
     from src.evaluation.evaluator import ClinicalEvaluator
     evaluator = ClinicalEvaluator()
     ensemble_proba = ensemble.predict_proba(X_test, X_seq_test)[:, 1]
     eval_report = evaluator.evaluate(
         y_true=y_test,
         y_proba=ensemble_proba,
-        meta=meta_test,
+        meta=None,  # reconstruct from meta_test if per-gene analysis needed
         model_name="EnsembleStacker",
     )
     evaluator.save_report(eval_report, out_dir / "eval_report.json")
 
-    # ── 6. Feature importance ───────────────────────────────────────────────
-    logger.info("━━━━ PHASE 5: Feature Importance ━━━━")
+    # -- 6. Feature importance ----------------------------------------------
+    logger.info("PHASE 5: Feature Importance")
     fi_df = compute_feature_importance(ensemble, feature_names)
     if fi_df is not None:
         logger.info("Top 10 features:\n%s", fi_df.head(10).to_string(index=False))
         fi_df.to_csv(out_dir / "feature_importance.csv", index=False)
 
-    # ── 7. Save ─────────────────────────────────────────────────────────────
-    logger.info("━━━━ PHASE 6: Saving ━━━━")
+    # -- 7. Save ------------------------------------------------------------
+    logger.info("PHASE 6: Saving")
     ensemble.save(out_dir / "ensemble_v1.joblib")
+
+    # Save validation split for InterpretabilityAgent (SHAP audit)
+    _val_df = X_val.copy() if hasattr(X_val, "copy") else pd.DataFrame(X_val, columns=feature_names)
+    _val_df["pathogenicity_class"] = y_val.values if hasattr(y_val, "values") else y_val
+    _val_df.to_parquet(out_dir / "val.parquet", index=False)
+    logger.info("Validation split saved to %s", out_dir / "val.parquet")
+
+    # Save CatBoost native .cbm file for SHAP and InterpretabilityAgent
+    _cb_key = next(
+        (k for k in ensemble.trained_models_ if "catboost" in k.lower()), None
+    )
+    if _cb_key is not None:
+        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        _cb_wrapper = ensemble.trained_models_[_cb_key]
+        if isinstance(_cb_wrapper, CatBoostVariantClassifier):
+            _cbm_path = out_dir / "catboost_model.cbm"
+            _cb_wrapper.save_catboost_model(_cbm_path)
+            logger.info("CatBoost model saved to %s", _cbm_path)
+        else:
+            logger.warning("CatBoost model is not a CatBoostVariantClassifier -- .cbm not written.")
+    else:
+        logger.warning("No CatBoost model found in trained_models_ -- .cbm not written.")
 
     metrics_dict = (
         metrics_df
@@ -253,6 +319,10 @@ def main() -> None:
                 "n_pathogenic_test":   int(y_test.sum()),
                 "n_features":          len(feature_names),
                 "feature_names":       feature_names,
+                "annotation_sources":  {
+                    "alphamissense": str(args.alphamissense) if args.alphamissense else None,
+                    "lovd":         str(args.lovd_path) if args.lovd_path else None,
+                },
                 "metrics":             metrics_dict,
                 "training_time_sec":   round(time.time() - t0, 1),
             },
@@ -260,13 +330,13 @@ def main() -> None:
         )
     logger.info("Metrics saved to %s", metrics_path)
 
-    # ── 8. Markdown summary ─────────────────────────────────────────────────
+    # -- 8. Markdown summary ------------------------------------------------
     md_path = out_dir / "METRICS.md"
     write_metrics_markdown(metrics_df, y_train, y_test, md_path)
     logger.info("README-ready markdown saved to %s", md_path)
 
     elapsed = time.time() - t0
-    logger.info("━━━━ Training complete in %.1fs ━━━━", elapsed)
+    logger.info("Training complete in %.1fs", elapsed)
     logger.info(
         "Best model: %s  AUROC=%.4f",
         metrics_df["auroc"].idxmax(), metrics_df["auroc"].max(),
@@ -288,7 +358,7 @@ def _apply_fast_mode(ensemble: "VariantEnsemble") -> None:
 def compute_feature_importance(
     ensemble: "VariantEnsemble",
     feature_names: list[str],
-) -> pd.DataFrame | None:
+) -> "pd.DataFrame | None":
     """
     Aggregate feature importances from all tree-based ensemble members.
 
@@ -330,7 +400,7 @@ def write_metrics_markdown(
     """Write a clean Markdown table for the repository README."""
     best_auroc = metrics_df["auroc"].max()
     lines = [
-        "## 📊 Model Performance\n",
+        "## Model Performance\n",
         f"Evaluated on **{len(y_test):,} held-out variants** "
         f"({int(y_test.sum()):,} pathogenic, "
         f"{int((y_test == 0).sum()):,} benign) "

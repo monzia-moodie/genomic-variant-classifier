@@ -576,7 +576,7 @@ class VariantEnsemble:
             }),
             "logistic_regression": LogisticRegression(
                 C=0.1, max_iter=1000, class_weight=cfg.class_weight,
-                n_jobs=cfg.n_jobs, random_state=cfg.random_state,
+                random_state=cfg.random_state,
             ),
             "gradient_boosting": GradientBoostingClassifier(
                 n_estimators=200, max_depth=4, learning_rate=0.05,
