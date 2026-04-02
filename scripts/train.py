@@ -269,16 +269,16 @@ def main() -> None:
     )
     evaluator.save_report(eval_report, out_dir / "eval_report.json")
 
-    # -- 6. Feature importance ----------------------------------------------
+    # -- 6. Save (before feature importance so a crash there never loses the model)
+    logger.info("PHASE 6: Saving")
+    ensemble.save(out_dir / "ensemble_v1.joblib")
+
+    # -- 7. Feature importance ----------------------------------------------
     logger.info("PHASE 5: Feature Importance")
     fi_df = compute_feature_importance(ensemble, feature_names)
     if fi_df is not None:
         logger.info("Top 10 features:\n%s", fi_df.head(10).to_string(index=False))
         fi_df.to_csv(out_dir / "feature_importance.csv", index=False)
-
-    # -- 7. Save ------------------------------------------------------------
-    logger.info("PHASE 6: Saving")
-    ensemble.save(out_dir / "ensemble_v1.joblib")
 
     # Save validation split for InterpretabilityAgent (SHAP audit)
     _val_df = X_val.copy() if hasattr(X_val, "copy") else pd.DataFrame(X_val, columns=feature_names)
@@ -375,7 +375,25 @@ def compute_feature_importance(
         base = getattr(base, "base_estimator", base)
         fi = getattr(base, "feature_importances_",
              getattr(model, "feature_importances_", None))
-        if fi is not None and len(fi) == len(feature_names):
+        # feature_importances_ may be a method (e.g. CatBoostVariantClassifier)
+        # rather than a property — call it and unwrap if needed.
+        if callable(fi):
+            try:
+                fi = fi()
+            except Exception:
+                fi = None
+        # Unwrap list-of-tuples [(name, score), ...] from CatBoost wrapper
+        if fi is not None and isinstance(fi, (list, tuple)) and fi and isinstance(fi[0], (list, tuple)):
+            try:
+                fi = [v for _, v in fi]
+            except Exception:
+                fi = None
+        if fi is not None:
+            try:
+                fi = np.asarray(fi, dtype=float)
+            except Exception:
+                fi = None
+        if fi is not None and fi.ndim == 1 and len(fi) == len(feature_names):
             importance_records.append(pd.Series(fi, index=feature_names, name=name))
 
     if not importance_records:
