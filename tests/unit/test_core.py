@@ -518,25 +518,23 @@ class TestDbNSFPConnector:
     @pytest.fixture
     def connector(self):
         """Connector with a synthetic in-memory index covering four variants."""
-        from src.data.dbnsfp import DbNSFPConnector, DbNSFPScores
+        import pandas as pd
+        from src.data.dbnsfp import DbNSFPConnector
         c = DbNSFPConnector(dbnsfp_file=None)
-        c._index = {
+        c._index = pd.DataFrame([
             # BRCA1 missense — deleterious across all tools
-            ("17", 43071077, "G", "T"): DbNSFPScores(
-                sift_score=0.03, polyphen2_score=0.95, revel_score=0.87,
-                cadd_phred=28.4, phylop_score=7.2, gerp_score=5.1,
-            ),
+            {"chrom": "17", "pos": 43071077, "ref": "G", "alt": "T",
+             "sift_score": 0.03, "polyphen2_score": 0.95, "revel_score": 0.87,
+             "cadd_phred": 28.4, "phylop_score": 7.2, "gerp_score": 5.1},
             # AGRN benign — tolerated across all tools
-            ("1", 925952, "G", "A"): DbNSFPScores(
-                sift_score=0.21, polyphen2_score=0.12, revel_score=0.11,
-                cadd_phred=8.3, phylop_score=0.3, gerp_score=-1.2,
-            ),
+            {"chrom": "1",  "pos": 925952,   "ref": "G", "alt": "A",
+             "sift_score": 0.21, "polyphen2_score": 0.12, "revel_score": 0.11,
+             "cadd_phred": 8.3,  "phylop_score": 0.3,  "gerp_score": -1.2},
             # X chromosome variant
-            ("X", 153296777, "C", "T"): DbNSFPScores(
-                sift_score=0.08, polyphen2_score=0.55, revel_score=0.44,
-                cadd_phred=17.1, phylop_score=3.1, gerp_score=2.8,
-            ),
-        }
+            {"chrom": "X",  "pos": 153296777, "ref": "C", "alt": "T",
+             "sift_score": 0.08, "polyphen2_score": 0.55, "revel_score": 0.44,
+             "cadd_phred": 17.1, "phylop_score": 3.1,  "gerp_score": 2.8},
+        ])
         return c
 
     @pytest.fixture
