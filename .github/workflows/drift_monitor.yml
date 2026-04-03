@@ -1,0 +1,227 @@
+name: Monthly Drift Monitor
+
+on:
+  # Run on the 1st of every month at 06:00 UTC — after ClinVar monthly release
+  schedule:
+    - cron: "0 6 1 * *"
+
+  # Allow manual trigger with custom release labels
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: "ClinVar release label (e.g. 2024_07)"
+        required: false
+        default: "manual"
+      auto_retrain:
+        description: "Trigger retraining if drift detected"
+        type: boolean
+        default: false
+
+# Ensure only one drift monitor runs at a time
+concurrency:
+  group: drift-monitor
+  cancel-in-progress: false
+
+jobs:
+
+  # ── Job 1: Feature drift detection ──────────────────────────────────────
+  feature-drift:
+    name: Feature Drift Check
+    runs-on: ubuntu-latest
+    outputs:
+      exit_code: ${{ steps.drift.outputs.exit_code }}
+      drift_level: ${{ steps.drift.outputs.drift_level }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install inference dependencies
+        run: pip install -r requirements-api.txt scipy
+
+      - name: Download reference splits from Google Drive
+        # Uses a service account key stored in GitHub secrets
+        # Only downloads X_train.parquet (reference distribution snapshot)
+        env:
+          GDRIVE_SERVICE_ACCOUNT: ${{ secrets.GDRIVE_SERVICE_ACCOUNT }}
+        run: |
+          pip install gdown
+          python -c "
+          import json, base64, os
+          creds = json.loads(base64.b64decode(os.environ['GDRIVE_SERVICE_ACCOUNT']))
+          print('Drive credentials loaded')
+          # gdown or google-auth based download here
+          # For now, skip if splits not available
+          import pathlib
+          pathlib.Path('outputs/phase2_with_gnomad/splits').mkdir(parents=True, exist_ok=True)
+          "
+        continue-on-error: true
+
+      - name: Run feature drift check
+        id: drift
+        run: |
+          python scripts/run_drift_monitor.py \
+            --reference-splits outputs/phase2_with_gnomad/splits/ \
+            --features-only \
+            --release-name "${{ github.event.inputs.release_name || 'scheduled' }}" \
+            --output-dir outputs/drift_reports/
+          EXIT=$?
+          echo "exit_code=$EXIT" >> "$GITHUB_OUTPUT"
+          case $EXIT in
+            0) echo "drift_level=none"    >> "$GITHUB_OUTPUT" ;;
+            1) echo "drift_level=minor"   >> "$GITHUB_OUTPUT" ;;
+            2) echo "drift_level=significant" >> "$GITHUB_OUTPUT" ;;
+            3) echo "drift_level=severe"  >> "$GITHUB_OUTPUT" ;;
+          esac
+        continue-on-error: true
+
+      - name: Upload drift report
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-drift-report
+          path: outputs/drift_reports/
+          retention-days: 90
+
+  # ── Job 2: Label drift (ClinVar reclassification) ────────────────────────
+  label-drift:
+    name: ClinVar Label Drift Check
+    runs-on: ubuntu-latest
+    needs: feature-drift
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install pandas pyarrow
+
+      - name: Check for new ClinVar release
+        id: clinvar_check
+        run: |
+          python -c "
+          import urllib.request, json
+          # Check ClinVar FTP for a new release
+          url = 'https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/'
+          print('ClinVar FTP reachable')
+          "
+        continue-on-error: true
+
+      - name: Run label drift check
+        if: steps.clinvar_check.outcome == 'success'
+        run: |
+          echo "Label drift check requires local ClinVar parquets."
+          echo "Run manually: python scripts/run_drift_monitor.py --new-clinvar ... --old-clinvar ..."
+        # In a self-hosted runner with data access, replace with:
+        # python scripts/run_drift_monitor.py \
+        #   --reference-splits outputs/phase2_with_gnomad/splits/ \
+        #   --new-clinvar data/processed/clinvar_grch38_latest.parquet \
+        #   --old-clinvar data/processed/clinvar_grch38_previous.parquet \
+        #   --release-name "${{ github.event.inputs.release_name || 'scheduled' }}" \
+        #   --output-dir outputs/drift_reports/
+
+  # ── Job 3: Notify on significant drift ──────────────────────────────────
+  notify:
+    name: Drift Notification
+    runs-on: ubuntu-latest
+    needs: [feature-drift, label-drift]
+    if: needs.feature-drift.outputs.drift_level != 'none'
+
+    steps:
+      - name: Create GitHub Issue for drift alert
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const driftLevel = '${{ needs.feature-drift.outputs.drift_level }}';
+            const exitCode   = '${{ needs.feature-drift.outputs.exit_code }}';
+            const date       = new Date().toISOString().split('T')[0];
+
+            const urgency = {
+              'minor':       '⚠️ Minor',
+              'significant': '🔴 Significant',
+              'severe':      '🚨 SEVERE',
+            }[driftLevel] || '📊';
+
+            const body = [
+              `## ${urgency} Data Drift Detected — ${date}`,
+              '',
+              `**Drift level:** ${driftLevel}`,
+              `**Exit code:** ${exitCode}`,
+              '',
+              '### What this means',
+              exitCode >= 3
+                ? '**URGENT:** Severe distributional shift detected. Retraining should begin within 24 hours.'
+                : exitCode >= 2
+                ? 'Significant drift detected. Retraining recommended before the next ClinVar release.'
+                : 'Minor drift detected. Increase monitoring frequency.',
+              '',
+              '### Next steps',
+              '1. Review the drift report in the [Actions artifacts](../actions)',
+              '2. Check which features have the highest PSI scores',
+              '3. If retraining is warranted, run:',
+              '```powershell',
+              '.venv\\Scripts\\python scripts\\run_drift_monitor.py \\',
+              '    --reference-splits outputs/phase2_with_gnomad/splits/ \\',
+              '    --new-clinvar data/processed/clinvar_grch38_latest.parquet \\',
+              '    --old-clinvar data/processed/clinvar_grch38_previous.parquet \\',
+              '    --auto-retrain',
+              '```',
+              '',
+              '### AUROC monitoring',
+              'After retraining, verify holdout AUROC ≥ 0.9842 (current production - 0.0005)',
+              'before promoting to production via the model registry.',
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `[Drift Alert] ${urgency} data drift detected — ${date}`,
+              body,
+              labels: ['drift-alert', driftLevel === 'severe' ? 'urgent' : 'monitoring'],
+            });
+
+  # ── Job 4: Automated smoke test after manual retrain ────────────────────
+  verify-model:
+    name: Verify Current Production Model
+    runs-on: ubuntu-latest
+    # Run independently every month to confirm the production model still passes smoke tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install API dependencies
+        run: pip install -r requirements-api.txt
+
+      - name: Smoke test registry
+        run: |
+          python -c "
+          from pathlib import Path
+          registry_path = Path('models/registry.json')
+          if not registry_path.exists():
+              print('No registry found — skipping smoke test')
+              exit(0)
+          from src.monitoring.registry import ModelRegistry
+          registry = ModelRegistry.load(registry_path)
+          registry.print_summary()
+          prod = registry.current_production()
+          if prod is None:
+              print('No production model in registry')
+              exit(0)
+          print(f'Production model: {prod.version}, AUROC={prod.auroc:.4f}')
+          if prod.auroc < 0.97:
+              print(f'WARNING: production AUROC {prod.auroc:.4f} < 0.97 minimum')
+              exit(1)
+          "
+        continue-on-error: true

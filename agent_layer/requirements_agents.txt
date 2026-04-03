@@ -1,0 +1,28 @@
+# Agent layer dependencies
+# Install with:
+#   pip install -r requirements_agents.txt --trusted-host pypi.org --trusted-host files.pythonhosted.org
+
+numpy>=1.26
+pandas>=2.1
+requests>=2.31
+scipy>=1.11
+
+# ResNet-50 EWC branch
+torch>=2.2
+torchvision>=0.17
+
+# SHAP + interpretability
+shap>=0.45
+matplotlib>=3.8
+
+# GCP (only needed for Dataproc + GCS checkpoint push)
+google-cloud-dataproc>=5.8
+google-cloud-storage>=2.14
+
+# Monitoring / experiment tracking (optional but recommended)
+# mlflow>=2.11
+# wandb>=0.16
+
+# Scheduling (choose one for production cron replacement)
+# schedule>=1.2        # lightweight in-process scheduler
+# apache-airflow>=2.9  # full DAG orchestration

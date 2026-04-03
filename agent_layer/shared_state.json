@@ -1,0 +1,184 @@
+{
+  "variant_corpus_version": null,
+  "corpus_last_updated": null,
+  "model_checkpoint_ref": "C:\\Projects\\genomic-variant-classifier\\models\\v1",
+  "model_last_trained": null,
+  "clinvar_last_seen_date": null,
+  "gnomad_last_seen_version": null,
+  "lovd_last_seen_timestamp": null,
+  "alphamissense_last_seen": null,
+  "drift_score": 0.0,
+  "drift_history": [],
+  "reclassification_rate": 0.0,
+  "ewc_fisher_ref": null,
+  "ewc_lambda": 400.0,
+  "pending_review": [
+    {
+      "reason": "Spark ingest blocked pending human approval",
+      "details": {
+        "clinvar": {
+          "new_release": false,
+          "release_date": null,
+          "new_variants": 0,
+          "reclassified": 0,
+          "current_dist": null,
+          "previous_dist": null
+        },
+        "gnomad": {
+          "new_release": false,
+          "version": null,
+          "new_variants": 0
+        },
+        "lovd": {
+          "new_variants": 0,
+          "reclassified": 0,
+          "genes_updated": []
+        },
+        "alphamissense": {
+          "new_release": true,
+          "etag": "\"9fd167735f16a1b87da6eb3e4c25fcb5\""
+        },
+        "drift_score": null,
+        "new_variants": 0,
+        "reclassified": 0,
+        "spark_triggered": false,
+        "errors": []
+      },
+      "agent": "DataFreshnessAgent",
+      "added_at": "2026-04-01T08:56:23.567732+00:00",
+      "resolved": true,
+      "resolved_at": "2026-04-01T10:39:17.075573+00:00"
+    },
+    {
+      "reason": "Spark ingest blocked pending human approval",
+      "details": {
+        "clinvar": {
+          "new_release": false,
+          "release_date": null,
+          "new_variants": 0,
+          "reclassified": 0,
+          "current_dist": null,
+          "previous_dist": null
+        },
+        "gnomad": {
+          "new_release": true,
+          "version": "\"02c67bb77109f1638650c0cfa389efd3\"|Wed, 17 Apr 2024 00:04:54 GMT",
+          "new_variants": 0
+        },
+        "lovd": {
+          "new_variants": 0,
+          "reclassified": 0,
+          "genes_updated": []
+        },
+        "alphamissense": {
+          "new_release": true,
+          "etag": "\"9fd167735f16a1b87da6eb3e4c25fcb5\""
+        },
+        "drift_score": null,
+        "new_variants": 0,
+        "reclassified": 0,
+        "spark_triggered": false,
+        "errors": []
+      },
+      "agent": "DataFreshnessAgent",
+      "added_at": "2026-04-01T10:38:51.163357+00:00",
+      "resolved": true,
+      "resolved_at": "2026-04-01T10:40:00.142395+00:00"
+    }
+  ],
+  "feature_candidates": [],
+  "shap_last_run": null,
+  "shap_report_path": null,
+  "shap_top_features": {},
+  "literature_last_run": null,
+  "literature_seen_ids": [],
+  "literature_digest_path": null,
+  "agent_run_log": [
+    {
+      "timestamp": "2026-04-01T08:56:23.574226+00:00",
+      "agent": "DataFreshnessAgent",
+      "action": "poll_and_flag",
+      "outcome": "success",
+      "details": {
+        "clinvar": {
+          "new_release": false,
+          "release_date": null,
+          "new_variants": 0,
+          "reclassified": 0,
+          "current_dist": null,
+          "previous_dist": null
+        },
+        "gnomad": {
+          "new_release": false,
+          "version": null,
+          "new_variants": 0
+        },
+        "lovd": {
+          "new_variants": 0,
+          "reclassified": 0,
+          "genes_updated": []
+        },
+        "alphamissense": {
+          "new_release": true,
+          "etag": "\"9fd167735f16a1b87da6eb3e4c25fcb5\""
+        },
+        "drift_score": null,
+        "new_variants": 0,
+        "reclassified": 0,
+        "spark_triggered": false,
+        "errors": [],
+        "queued_for_review": true
+      }
+    },
+    {
+      "timestamp": "2026-04-01T10:38:51.169987+00:00",
+      "agent": "DataFreshnessAgent",
+      "action": "poll_and_flag",
+      "outcome": "success",
+      "details": {
+        "clinvar": {
+          "new_release": false,
+          "release_date": null,
+          "new_variants": 0,
+          "reclassified": 0,
+          "current_dist": null,
+          "previous_dist": null
+        },
+        "gnomad": {
+          "new_release": true,
+          "version": "\"02c67bb77109f1638650c0cfa389efd3\"|Wed, 17 Apr 2024 00:04:54 GMT",
+          "new_variants": 0
+        },
+        "lovd": {
+          "new_variants": 0,
+          "reclassified": 0,
+          "genes_updated": []
+        },
+        "alphamissense": {
+          "new_release": true,
+          "etag": "\"9fd167735f16a1b87da6eb3e4c25fcb5\""
+        },
+        "drift_score": null,
+        "new_variants": 0,
+        "reclassified": 0,
+        "spark_triggered": false,
+        "errors": [],
+        "queued_for_review": true
+      }
+    },
+    {
+      "timestamp": "2026-04-01T11:35:09.818503+00:00",
+      "agent": "InterpretabilityAgent",
+      "action": "analyze",
+      "outcome": "failure",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-04-01T12:07:25.778187+00:00",
+      "agent": "InterpretabilityAgent",
+      "action": "analyze",
+      "outcome": "failure",
+      "details": {}
+    }
+  ]
+}

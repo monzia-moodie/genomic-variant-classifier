@@ -86,4 +86,10 @@ data/synthetic/
 .pytest_cache/
 
 # Track model manifests (small JSON, not binary artifacts)
-!models/*.manifest.json
+!/models/*.manifest.json
+
+
+data/external/finngen/*.gz
+data/external/finngen/*.tsv
+
+data/external/finngen/finnge_R12*.gz
