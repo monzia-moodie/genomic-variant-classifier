@@ -409,7 +409,7 @@ class DbNSFPConnector:
                 "Download from https://sites.google.com/site/jpopgen/dbNSFP",
                 self._path,
             )
-            return {}
+            return pd.DataFrame(columns=["chrom", "pos", "ref", "alt"] + list(_OUTPUT_COLS.values()))
 
         logger.info(
             "DbNSFP: parsing %s (this may take 90–180 s) …", self._path
@@ -500,11 +500,11 @@ class DbNSFPConnector:
 
         except Exception as exc:
             logger.error("DbNSFP: failed to parse %s: %s", self._path, exc)
-            return {}
+            return pd.DataFrame(columns=["chrom", "pos", "ref", "alt"] + list(_OUTPUT_COLS.values()))
 
         if not chunks:
             logger.warning("DbNSFP: no valid rows parsed from %s.", self._path)
-            return {}
+            return pd.DataFrame(columns=["chrom", "pos", "ref", "alt"] + list(_OUTPUT_COLS.values()))
 
         full = pd.concat(chunks, ignore_index=True)
         full = full.drop_duplicates(subset=["chrom", "pos", "ref", "alt"])
