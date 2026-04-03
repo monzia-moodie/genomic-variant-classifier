@@ -93,3 +93,18 @@ data/external/finngen/*.gz
 data/external/finngen/*.tsv
 
 data/external/finngen/finnge_R12*.gz
+
+# Scratch and generated files
+catboost_info/
+catboost_wrapper.py
+test_catboost.py
+download_finngen.py
+patch_finngen_wiring.py
+requirements-current.txt
+model/
+outputs/
+agent_layer.zip
+lovd/
+tumor gene data.txt
+variant_ensemble_cff925c.py
+.claude/
