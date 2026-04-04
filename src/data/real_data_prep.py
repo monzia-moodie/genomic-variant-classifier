@@ -173,6 +173,8 @@ class AnnotationConfig:
     lovd_path:          Optional[Path] = None   # LOVD all-variants parquet
     rna_pipeline:       bool           = True   # Phase 6.1: RNA splice-context features
     protein_cache_dir:  Optional[Path] = None   # Phase 6.2: AlphaFold/UniProt cache dir
+    esm2_model_name:    str            = "esm2_t6_8M_UR50D"   # Phase 3C: ESM-2 model
+    esm2_cache_path:    Optional[Path] = None                  # Phase 3C: SQLite cache
 
 
 # ---------------------------------------------------------------------------
@@ -567,8 +569,21 @@ class DataPrepPipeline:
         lovd = LOVDConnector(parquet_path=ac.lovd_path)
         df = lovd.annotate_dataframe(df)
         logger.info(
-            "Score annotation 15/15 (LOVD): %d variants with lovd_variant_class > 0.",
+            "Score annotation 15/16 (LOVD): %d variants with lovd_variant_class > 0.",
             int((df.get("lovd_variant_class", pd.Series([0]*len(df), index=df.index)) > 0).sum()),
+        )
+
+        # 16. ESM-2 protein language model delta norm (Phase 3C)
+        # Stub mode (esm2_delta_norm = 0.0) when transformers/torch not installed.
+        from src.data.esm2 import ESM2Connector
+        esm2 = ESM2Connector(
+            model_name=ac.esm2_model_name,
+            cache_path=ac.esm2_cache_path,
+        )
+        df = esm2.annotate_dataframe(df)
+        logger.info(
+            "Score annotation 16/16 (ESM-2): %d missense variants with esm2_delta_norm > 0.",
+            int((df.get("esm2_delta_norm", pd.Series([0.0]*len(df), index=df.index)) > 0).sum()),
         )
 
         return df
@@ -711,14 +726,19 @@ class DataPrepPipeline:
         # 1KGP population-stratified AF (5)
         for _col in ("af_1kg_afr", "af_1kg_eur", "af_1kg_eas", "af_1kg_sas", "af_1kg_amr"):
             feats[_col] = df.get(_col, pd.Series([0.0] * len(df), index=df.index)).fillna(0.0).astype(float).clip(lower=0)
-
-        # FinnGen R10 population AF (3)
+# FinnGen R10 population AF (3)
         for _col, _default in [
             ("finngen_af_fin",     0.0),
             ("finngen_af_nfsee",   0.0),
             ("finngen_enrichment", 1.0),
         ]:
             feats[_col] = df.get(_col, pd.Series([_default] * len(df), index=df.index)).fillna(_default).astype(float)
+
+        # ESM-2 delta norm (1) — Phase 3C; 0.0 when model unavailable or non-missense
+        feats["esm2_delta_norm"] = (
+            df.get("esm2_delta_norm", pd.Series([0.0] * len(df), index=df.index))
+            .fillna(0.0).astype(float).clip(lower=0.0)
+        )
 
         n_nan = feats.isnull().sum().sum()
         if n_nan > 0:

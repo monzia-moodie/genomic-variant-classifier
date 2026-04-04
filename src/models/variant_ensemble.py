@@ -210,8 +210,10 @@ TABULAR_FEATURES = [
     "finngen_af_fin",
     "finngen_af_nfsee",
     "finngen_enrichment",
+    # ESM-2 protein language model delta norm (1) — Phase 3C
+    "esm2_delta_norm",
 ]
-# Total: 6+7+6+9+5+4+2+6+2+3+2+1+3+1+4+4+5+3 = 73 (includes 3 FinnGen AF)
+# Total: 6+7+6+9+5+4+2+6+2+3+2+1+3+1+4+4+5+3+1 = 74 (includes ESM-2)
 
 PHASE_2_FEATURES: list[str] = []
 
@@ -409,6 +411,12 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
             _col, pd.Series([_default] * len(df), index=df.index)
         ).fillna(_default).astype(float)
 
+    # ESM-2 delta norm (1) — 0.0 default when model unavailable or non-missense
+    feats["esm2_delta_norm"] = (
+        df.get("esm2_delta_norm", pd.Series([0.0] * len(df), index=df.index))
+        .fillna(0.0).astype(float).clip(lower=0.0)
+    )
+
     feats = feats[TABULAR_FEATURES]
     assert list(feats.columns) == TABULAR_FEATURES, (
         f"Feature column mismatch.\nExpected: {TABULAR_FEATURES}\nGot: {list(feats.columns)}"
@@ -570,7 +578,9 @@ class _IsotonicCalibrator:
 
 
 def _write_model_manifest(artifact_path):
-    import json, platform, importlib.metadata
+    import json
+    import platform
+    import importlib.metadata
     from datetime import datetime, timezone
     artifact_path = Path(artifact_path)
     libraries = ["numpy", "scikit-learn", "catboost", "lightgbm", "xgboost", "joblib", "pandas", "scipy"]
