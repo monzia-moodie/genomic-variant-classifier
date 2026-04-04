@@ -627,6 +627,42 @@ class VariantEnsemble:
         }
         self.meta_learner = LogisticRegression(C=0.1, max_iter=1000, random_state=cfg.random_state)
         self.trained_models_: dict = {}
+        self.blend_weights_: Optional[np.ndarray] = None
+
+    @staticmethod
+    def _find_blend_weights(oof_preds: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """
+        Nelder-Mead convex blend search over OOF predictions.
+
+        Finds non-negative weights w (summing to 1) that maximise validation
+        AUROC of the weighted blend oof_preds @ w.  Outperforms a logistic
+        regression meta-learner when base model scores are highly correlated
+        (the typical case when all models are trained on the same features).
+
+        Falls back gracefully to equal weights if scipy is unavailable or
+        optimisation fails to converge.
+        """
+        from scipy.optimize import minimize
+
+        n_models = oof_preds.shape[1]
+        w0 = np.ones(n_models) / n_models
+
+        def neg_auroc(w: np.ndarray) -> float:
+            w_abs = np.abs(w)
+            total = w_abs.sum()
+            if total == 0:
+                return 0.0
+            blend = oof_preds @ (w_abs / total)
+            return -roc_auc_score(y, blend)
+
+        result = minimize(
+            neg_auroc, w0,
+            method="Nelder-Mead",
+            options={"maxiter": 5000, "xatol": 1e-5, "fatol": 1e-5},
+        )
+        w = np.abs(result.x)
+        w /= w.sum()
+        return w
 
     def fit(self, X_tab: pd.DataFrame, X_seq: pd.Series, y: pd.Series) -> "VariantEnsemble":
         from sklearn.model_selection import train_test_split as _tts
@@ -711,8 +747,22 @@ class VariantEnsemble:
         oof_preds = oof_preds[:, valid_cols]
 
         logger.info("Training meta-learner on %d base-model OOF columns ...", len(valid_cols))
-        self.meta_learner.fit(oof_preds, y_fit)
+        self.meta_learner.fit(oof_preds, y_fit)  # retained as fallback for loaded old models
+
+        logger.info("Running Nelder-Mead blend weight search ...")
+        self.blend_weights_ = self._find_blend_weights(oof_preds, y_fit)
         self.feature_names_ = list(self.trained_models_.keys())
+        logger.info(
+            "Blend weights: %s",
+            {n: round(float(w), 4)
+             for n, w in zip(self.feature_names_, self.blend_weights_)},
+        )
+        blend_auroc = roc_auc_score(y_fit, oof_preds @ self.blend_weights_)
+        lr_auroc    = roc_auc_score(y_fit, self.meta_learner.predict_proba(oof_preds)[:, 1])
+        logger.info(
+            "OOF blend AUROC: %.4f  (LR stacker: %.4f  Δ=%.4f)",
+            blend_auroc, lr_auroc, blend_auroc - lr_auroc,
+        )
 
         # Free unfitted base_estimators from memory (Issue H).
         self.base_estimators.clear()
@@ -725,6 +775,12 @@ class VariantEnsemble:
         for i, (name, model) in enumerate(self.trained_models_.items()):
             X_input = X_seq if name == "cnn_1d" else (X_tab if name == "catboost" else X_tab.values)
             base_preds[:, i] = model.predict_proba(X_input)[:, 1]
+
+        # Prefer Nelder-Mead convex blend; fall back to LR stacker for
+        # models loaded from disk before this change was introduced.
+        if self.blend_weights_ is not None:
+            blend = base_preds @ self.blend_weights_
+            return np.column_stack([1.0 - blend, blend])
         return self.meta_learner.predict_proba(base_preds)
 
     def predict(self, X_tab: pd.DataFrame, X_seq: pd.Series) -> np.ndarray:
