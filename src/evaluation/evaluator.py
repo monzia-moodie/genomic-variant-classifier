@@ -45,11 +45,9 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
     average_precision_score,
-    f1_score,
     matthews_corrcoef,
     roc_auc_score,
     roc_curve,
@@ -349,37 +347,50 @@ class ClinicalEvaluator:
         min_ppv: float = 0.80,
     ) -> Optional[OperatingPoint]:
         """
-        Find the highest-sensitivity operating point where PPV ≥ min_ppv.
-        This is the clinical "high-confidence reporting" threshold.
+        Highest-sensitivity threshold where PPV ≥ min_ppv.
+
+        Walk thresholds from HIGH→LOW (conservative→liberal).
+        Track the last threshold seen where ppv ≥ min_ppv — that is the
+        most permissive threshold that never drops below min_ppv.
         """
-        for t in np.sort(np.unique(p))[::-1]:  # highest threshold first
+        thresholds = np.sort(np.unique(p))[::-1]  # high → low
+        best: Optional[OperatingPoint] = None
+
+        for t in thresholds:
             preds = (p >= t).astype(int)
             tp = int(((preds == 1) & (y == 1)).sum())
             fp = int(((preds == 1) & (y == 0)).sum())
             fn = int(((preds == 0) & (y == 1)).sum())
             tn = int(((preds == 0) & (y == 0)).sum())
             n_pos = tp + fn
-            n_neg = fp + tn
-            if (tp + fp) == 0 or n_pos == 0:
+            n_neg = tp + fp  # n_flagged
+
+            if n_neg == 0 or n_pos == 0:
                 continue
-            ppv = tp / (tp + fp)
-            if ppv >= min_ppv:
-                sensitivity = tp / n_pos
-                specificity = tn / n_neg if n_neg > 0 else 0.0
-                npv = tn / (tn + fn) if (tn + fn) > 0 else 0.0
-                f1  = (2 * ppv * sensitivity / (ppv + sensitivity)
-                       if (ppv + sensitivity) > 0 else 0.0)
-                return OperatingPoint(
-                    threshold=round(float(t), 4),
-                    sensitivity=round(sensitivity, 4),
-                    specificity=round(specificity, 4),
-                    ppv=round(ppv, 4),
-                    npv=round(npv, 4),
-                    f1=round(f1, 4),
-                    n_flagged=int(tp + fp),
-                    n_tp=tp, n_fp=fp, n_fn=fn, n_tn=tn,
-                )
-        return None
+
+            ppv = tp / n_neg
+            if ppv < min_ppv:
+                # Once PPV drops below target, stop — prior iteration was the best
+                break
+
+            sensitivity = tp / n_pos
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+            npv         = tn / (tn + fn) if (tn + fn) > 0 else 0.0
+            f1          = (2 * ppv * sensitivity / (ppv + sensitivity)
+                           if (ppv + sensitivity) > 0 else 0.0)
+
+            best = OperatingPoint(
+                threshold   = round(float(t), 4),
+                sensitivity = round(sensitivity, 4),
+                specificity = round(specificity, 4),
+                ppv         = round(ppv, 4),
+                npv         = round(npv, 4),
+                f1          = round(f1, 4),
+                n_flagged   = int(n_neg),
+                n_tp=tp, n_fp=fp, n_fn=fn, n_tn=tn,
+            )
+
+        return best
 
     # ── Breakdown helpers ──────────────────────────────────────────────────
 

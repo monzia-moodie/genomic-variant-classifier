@@ -158,6 +158,55 @@ def platt_scale(raw_scores: np.ndarray, y_val: np.ndarray) -> LogisticRegression
     return lr
 
 
+def _ece(scores: np.ndarray, y: np.ndarray, n_bins: int = 10) -> float:
+    """Expected Calibration Error — weighted mean |accuracy - confidence| per bin."""
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    n = len(y)
+    for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
+        mask = (scores >= lo) & (scores < hi)
+        if mask.sum() == 0:
+            continue
+        ece += (mask.sum() / n) * abs(float(y[mask].mean()) - float(scores[mask].mean()))
+    return float(ece)
+
+
+def temperature_scale(
+    raw_scores: np.ndarray,
+    y_val: np.ndarray,
+) -> tuple[float, np.ndarray]:
+    """
+    Temperature scaling: divide logits by T, then sigmoid.
+
+    Finds T > 0 that minimises NLL on the validation set via
+    scipy.optimize.minimize_scalar (bounded Brent method).
+    Preserves AUROC exactly (monotonic transformation).
+    Typically achieves lower ECE than Platt on large, well-trained models.
+
+    Returns (T, calibrated_scores).
+    """
+    from scipy.optimize import minimize_scalar
+    from scipy.special import expit  # numerically stable sigmoid
+
+    eps = 1e-7
+    logits = np.log(
+        (raw_scores + eps) / (1.0 - raw_scores + eps)
+    )
+
+    def nll(T: float) -> float:
+        if T <= 0:
+            return 1e9
+        p = expit(logits / T)
+        return float(-np.mean(y_val * np.log(p + eps) + (1 - y_val) * np.log(1 - p + eps)))
+
+    result = minimize_scalar(nll, bounds=(0.01, 10.0), method="bounded")
+    T = float(result.x)
+    calibrated = expit(logits / T)
+    logger.info("Temperature scaling: T=%.4f  (NLL=%.4f)", T, result.fun)
+    return T, calibrated
+
+
+
 def find_ppv_threshold(
     calibrated_scores: np.ndarray,
     y_true: np.ndarray,
@@ -271,24 +320,50 @@ def main() -> int:
         return 2
 
     # Platt scaling
+    from sklearn.metrics import roc_auc_score, brier_score_loss
+
+    logger.info(
+        "Pre-calibration:  AUROC=%.4f  Brier=%.4f  ECE=%.4f",
+        roc_auc_score(y_val, raw_scores),
+        brier_score_loss(y_val, raw_scores),
+        _ece(raw_scores, y_val),
+    )
+
+    # Platt scaling
     platt = platt_scale(raw_scores, y_val)
     eps = 1e-7
     log_odds = np.log(
         (raw_scores + eps) / (1.0 - raw_scores + eps)
     ).reshape(-1, 1)
-    calibrated = platt.predict_proba(log_odds)[:, 1]
+    platt_scores = platt.predict_proba(log_odds)[:, 1]
+    platt_ece = _ece(platt_scores, y_val)
+    logger.info(
+        "Platt scaling:    AUROC=%.4f  Brier=%.4f  ECE=%.4f",
+        roc_auc_score(y_val, platt_scores),
+        brier_score_loss(y_val, platt_scores),
+        platt_ece,
+    )
 
-    from sklearn.metrics import roc_auc_score, brier_score_loss
+    # Temperature scaling
+    temp_T, temp_scores = temperature_scale(raw_scores, y_val)
+    temp_ece = _ece(temp_scores, y_val)
     logger.info(
-        "Pre-calibration:  AUROC=%.4f  Brier=%.4f",
-        roc_auc_score(y_val, raw_scores),
-        brier_score_loss(y_val, raw_scores),
+        "Temp scaling:     AUROC=%.4f  Brier=%.4f  ECE=%.4f  T=%.4f",
+        roc_auc_score(y_val, temp_scores),
+        brier_score_loss(y_val, temp_scores),
+        temp_ece,
+        temp_T,
     )
-    logger.info(
-        "Post-calibration: AUROC=%.4f  Brier=%.4f",
-        roc_auc_score(y_val, calibrated),
-        brier_score_loss(y_val, calibrated),
-    )
+
+    # Use whichever method achieves lower ECE for threshold derivation
+    if temp_ece <= platt_ece:
+        calibrated = temp_scores
+        calibration_method = "temperature"
+        logger.info("Selected: temperature scaling (ECE %.4f vs Platt %.4f)", temp_ece, platt_ece)
+    else:
+        calibrated = platt_scores
+        calibration_method = "platt"
+        logger.info("Selected: Platt scaling (ECE %.4f vs temperature %.4f)", platt_ece, temp_ece)
 
     thresholds = compute_thresholds(
         calibrated, y_val,
@@ -297,16 +372,22 @@ def main() -> int:
     )
 
     output = {
-        "thresholds":        thresholds,
-        "platt_coef":        float(platt.coef_[0, 0]),
-        "platt_intercept":   float(platt.intercept_[0]),
-        "val_auroc_raw":     round(float(roc_auc_score(y_val, raw_scores)), 4),
-        "val_auroc_calib":   round(float(roc_auc_score(y_val, calibrated)), 4),
-        "val_brier_raw":     round(float(brier_score_loss(y_val, raw_scores)), 4),
-        "val_brier_calib":   round(float(brier_score_loss(y_val, calibrated)), 4),
-        "n_val":             int(len(y_val)),
-        "ppv_pathogenic":    args.ppv_pathogenic,
-        "ppv_likely":        args.ppv_likely,
+        "thresholds":           thresholds,
+        "calibration_method":   calibration_method,
+        "temperature_T":        round(temp_T, 6),
+        "platt_coef":           float(platt.coef_[0, 0]),
+        "platt_intercept":      float(platt.intercept_[0]),
+        "val_auroc_raw":        round(float(roc_auc_score(y_val, raw_scores)), 4),
+        "val_auroc_calib":      round(float(roc_auc_score(y_val, calibrated)), 4),
+        "val_brier_raw":        round(float(brier_score_loss(y_val, raw_scores)), 4),
+        "val_brier_calib":      round(float(brier_score_loss(y_val, calibrated)), 4),
+        "val_ece_raw":          round(_ece(raw_scores, y_val), 5),
+        "val_ece_platt":        round(platt_ece, 5),
+        "val_ece_temperature":  round(temp_ece, 5),
+        "val_ece_selected":     round(_ece(calibrated, y_val), 5),
+        "n_val":                int(len(y_val)),
+        "ppv_pathogenic":       args.ppv_pathogenic,
+        "ppv_likely":           args.ppv_likely,
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
