@@ -71,6 +71,7 @@ data/processed/*
 !data/processed/gene_summary.parquet
 data/models/
 data/synthetic/
+data/external/gnomad/
 
 # ── Generated caches ──────────────────────────────────────────────
 *.csv.gz
