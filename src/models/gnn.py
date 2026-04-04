@@ -538,6 +538,7 @@ def train_gnn_pipeline(
     variant_df: pd.DataFrame,
     node_feature_cols: list[str],
     string_threshold: int = 700,
+    string_kwargs: Optional[dict] = None,
     test_split: float = 0.2,
     epochs: int = 100,
     batch_size: int = 32,
@@ -559,7 +560,9 @@ def train_gnn_pipeline(
     """
     from sklearn.model_selection import train_test_split
 
-    builder = StringDBGraph(combined_score_threshold=string_threshold)
+    _kwargs = string_kwargs or {}
+    _kwargs.setdefault("combined_score_threshold", string_threshold)
+    builder = StringDBGraph(**_kwargs)
     graph = builder.build()
 
     dataset = build_pyg_dataset(variant_df, graph, node_feature_cols)
