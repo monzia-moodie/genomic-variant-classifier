@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -82,8 +81,45 @@ def compute_ensemble_shap(
         model = lgb.Booster(model_file=str(model_path))
         explainer = shap.TreeExplainer(model)
 
+    elif model_type == "catboost":
+        # CatBoost uses its own ShapValues API — incompatible with shap.TreeExplainer.
+        # get_feature_importance(Pool(...), type='ShapValues') returns
+        # shape (n_samples, n_features + 1) where the last column is the bias term.
+        try:
+            from catboost import CatBoostClassifier, Pool  # type: ignore
+        except ImportError as exc:
+            raise ImportError("catboost required") from exc
+
+        import pandas as pd
+        model = CatBoostClassifier()
+        model.load_model(str(model_path))
+
+        # Wrap as DataFrame so CatBoost can resolve column names
+        X_df = pd.DataFrame(X, columns=feature_names)
+        pool = Pool(X_df)
+
+        log.info("Computing SHAP values (catboost, %d samples) …", X.shape[0])
+        # shape: (n_samples, n_features + 1) — last col is bias
+        shap_raw = model.get_feature_importance(pool, type="ShapValues")
+        shap_values = shap_raw[:, :-1]  # strip bias column → (n_samples, n_features)
+
+        mean_abs_shap = np.abs(shap_values).mean(axis=0)
+        log.info("CatBoost SHAP done. Top feature: %s (mean |SHAP|=%.4f)",
+                 feature_names[np.argmax(mean_abs_shap)], mean_abs_shap.max())
+
+        return {
+            "shap_values":    shap_values[:, :, np.newaxis],  # (n, f, 1) for consistency
+            "expected_value": 0.0,
+            "feature_names":  feature_names,
+            "mean_abs_shap":  mean_abs_shap,
+            "class_labels":   ["Pathogenic"],
+            "n_samples":      X.shape[0],
+        }
+
     else:
-        raise ValueError(f"model_type must be 'xgboost' or 'lightgbm', got '{model_type}'")
+        raise ValueError(
+            f"model_type must be 'xgboost', 'lightgbm', or 'catboost', got '{model_type}'"
+        )
 
     log.info("Computing SHAP values (%s, %d samples) …", model_type, X.shape[0])
     shap_values = explainer.shap_values(X)
@@ -350,7 +386,7 @@ def _make_bar_chart(ranking: list[dict], title: str, color: str = "#4f8ef7"):
     fig.patch.set_facecolor("#0f1117")
     ax.set_facecolor("#0f1117")
 
-    bars = ax.barh(range(n), vals, color=color, alpha=0.85, height=0.65)
+    ax.barh(range(n), vals, color=color, alpha=0.85, height=0.65)
     ax.set_yticks(range(n))
     ax.set_yticklabels(labs, fontsize=8.5, color="#c9d1d9")
     ax.set_xlabel("Mean |SHAP value|", color="#8b949e", fontsize=9)
