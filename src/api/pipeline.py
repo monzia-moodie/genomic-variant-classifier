@@ -49,15 +49,21 @@ assert len(INFERENCE_FEATURE_COLUMNS) == 78, (
 # Metadata
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PipelineMetadata:
     """Immutable provenance stored alongside the model artifact."""
-    created_at:    str       = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
-    val_auroc:     float     = 0.0
-    n_train:       int       = 0
-    n_features:    int       = 0
-    feature_names: list[str] = field(default_factory=lambda: list(INFERENCE_FEATURE_COLUMNS))
-    model_version: str       = "phase2"
+
+    created_at: str = field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
+    )
+    val_auroc: float = 0.0
+    n_train: int = 0
+    n_features: int = 0
+    feature_names: list[str] = field(
+        default_factory=lambda: list(INFERENCE_FEATURE_COLUMNS)
+    )
+    model_version: str = "phase2"
 
 
 # ---------------------------------------------------------------------------
@@ -69,24 +75,29 @@ def _write_model_manifest(artifact_path):
     """Write a JSON manifest recording the library versions used to create this artifact."""
     import json, platform, importlib.metadata
     from datetime import datetime, timezone
+
     artifact_path = Path(artifact_path)
     libraries = [
-        "numpy", "scikit-learn", "catboost", "lightgbm",
-        "xgboost", "joblib", "pandas", "scipy",
+        "numpy",
+        "scikit-learn",
+        "catboost",
+        "lightgbm",
+        "xgboost",
+        "joblib",
+        "pandas",
+        "scipy",
     ]
     manifest = {
-        "artifact":   artifact_path.name,
+        "artifact": artifact_path.name,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "python":     platform.python_version(),
-        "platform":   platform.platform(),
-        "libraries":  {
-            lib: importlib.metadata.version(lib)
-            for lib in libraries
-        },
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "libraries": {lib: importlib.metadata.version(lib) for lib in libraries},
     }
     manifest_path = artifact_path.with_suffix(".manifest.json")
     manifest_path.write_text(json.dumps(manifest, indent=2))
     return manifest_path
+
 
 class InferencePipeline:
     """
@@ -119,10 +130,10 @@ class InferencePipeline:
         gnn_scorer=None,
     ) -> None:
         self.trained_models = trained_models
-        self.meta_learner   = meta_learner
-        self.scaler         = scaler
-        self.metadata       = metadata or PipelineMetadata()
-        self.gnn_scorer     = gnn_scorer   # Optional GNNScorer instance
+        self.meta_learner = meta_learner
+        self.scaler = scaler
+        self.metadata = metadata or PipelineMetadata()
+        self.gnn_scorer = gnn_scorer  # Optional GNNScorer instance
 
     # ------------------------------------------------------------------
     # Factory
@@ -155,16 +166,16 @@ class InferencePipeline:
             )
         feature_names = feature_names or INFERENCE_FEATURE_COLUMNS
         metadata = PipelineMetadata(
-            val_auroc     = val_auroc,
-            n_train       = n_train,
-            n_features    = len(feature_names),
-            feature_names = feature_names,
+            val_auroc=val_auroc,
+            n_train=n_train,
+            n_features=len(feature_names),
+            feature_names=feature_names,
         )
         return cls(
-            trained_models = trained_models,
-            meta_learner   = ensemble.meta_learner,
-            scaler         = scaler,
-            metadata       = metadata,
+            trained_models=trained_models,
+            meta_learner=ensemble.meta_learner,
+            scaler=scaler,
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------
@@ -232,9 +243,12 @@ class InferencePipeline:
         # Use the scaler's feature_names_in_ when available (authoritative),
         # otherwise fall back to INFERENCE_FEATURE_COLUMNS.  This handles
         # models saved before TABULAR_FEATURES was expanded (e.g. 46 → 64).
-        scaler_features = getattr(self.scaler, "feature_names_in_", None) if self.scaler else None
+        scaler_features = (
+            getattr(self.scaler, "feature_names_in_", None) if self.scaler else None
+        )
         model_features: list[str] = (
-            list(scaler_features) if scaler_features is not None
+            list(scaler_features)
+            if scaler_features is not None
             else list(INFERENCE_FEATURE_COLUMNS)
         )
 
@@ -254,21 +268,19 @@ class InferencePipeline:
                     X[col] = 0.0
 
         X_np = X[model_features].values
-        X_df_cat = None   # lazy — only built if catboost is in trained_models
+        X_df_cat = None  # lazy — only built if catboost is in trained_models
         base_preds_list = []
         for name, model in self.trained_models.items():
             if name == "catboost":
                 if X_df_cat is None:
-                    X_df_cat = X[model_features]   # DataFrame preserves column names
+                    X_df_cat = X[model_features]  # DataFrame preserves column names
                 base_preds_list.append(model.predict_proba(X_df_cat)[:, 1])
             else:
                 base_preds_list.append(model.predict_proba(X_np)[:, 1])
         base_preds = np.column_stack(base_preds_list)
         return self.meta_learner.predict_proba(base_preds)[:, 1]
 
-    def predict_proba_with_uncertainty(
-        self, df: pd.DataFrame
-    ) -> dict[str, np.ndarray]:
+    def predict_proba_with_uncertainty(self, df: pd.DataFrame) -> dict[str, np.ndarray]:
         """
         Return pathogenicity scores and uncertainty estimates.
 
@@ -298,14 +310,19 @@ class InferencePipeline:
                     lambda g: self.gnn_scorer.score(g)
                 )
             except Exception as exc:
-                logger.warning("GNNScorer failed (%s) -- defaulting gnn_score to 0.5.", exc)
+                logger.warning(
+                    "GNNScorer failed (%s) -- defaulting gnn_score to 0.5.", exc
+                )
                 enriched["gnn_score"] = 0.5
 
         X = engineer_features(enriched)
 
-        scaler_features = getattr(self.scaler, "feature_names_in_", None) if self.scaler else None
+        scaler_features = (
+            getattr(self.scaler, "feature_names_in_", None) if self.scaler else None
+        )
         model_features: list[str] = (
-            list(scaler_features) if scaler_features is not None
+            list(scaler_features)
+            if scaler_features is not None
             else list(INFERENCE_FEATURE_COLUMNS)
         )
 
@@ -324,16 +341,18 @@ class InferencePipeline:
                     X[col] = 0.0
 
         X_np = X[model_features].values
-        X_df_cat = None   # lazy — only built if catboost is in trained_models
+        X_df_cat = None  # lazy — only built if catboost is in trained_models
         base_preds_list = []
         for name, model in self.trained_models.items():
             if name == "catboost":
                 if X_df_cat is None:
-                    X_df_cat = X[model_features]   # DataFrame preserves column names
+                    X_df_cat = X[model_features]  # DataFrame preserves column names
                 base_preds_list.append(model.predict_proba(X_df_cat)[:, 1])
             else:
                 base_preds_list.append(model.predict_proba(X_np)[:, 1])
-        base_preds = np.column_stack(base_preds_list)  # shape (n_variants, n_base_models)
+        base_preds = np.column_stack(
+            base_preds_list
+        )  # shape (n_variants, n_base_models)
 
         # Epistemic: variance across base model predictions
         uncertainty_epistemic = base_preds.var(axis=1)
@@ -355,8 +374,14 @@ class InferencePipeline:
     # ------------------------------------------------------------------
 
     def _predict_df(self, df: pd.DataFrame) -> list[dict[str, Any]]:
-        proba = self.predict_proba(df)
-        return [_score_to_result(float(p)) for p in proba]
+        result = self.predict_proba_with_uncertainty(df)
+        proba = result["proba"]
+        epistemic = result["uncertainty_epistemic"]
+        aleatoric = result["uncertainty_aleatoric"]
+        return [
+            _score_to_result(float(p), float(e), float(a))
+            for p, e, a in zip(proba, epistemic, aleatoric)
+        ]
 
     # ------------------------------------------------------------------
     # Serialisation
@@ -364,6 +389,7 @@ class InferencePipeline:
 
     def save(self, path: str | Path) -> None:
         import joblib
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self, path)
@@ -373,6 +399,7 @@ class InferencePipeline:
     @classmethod
     def load(cls, path: str | Path) -> "InferencePipeline":
         import joblib
+
         obj = joblib.load(path)
         if not isinstance(obj, cls):
             raise TypeError(f"Expected InferencePipeline, got {type(obj)}")
@@ -389,12 +416,20 @@ class InferencePipeline:
 # Helper
 # ---------------------------------------------------------------------------
 
-def _score_to_result(score: float) -> dict[str, Any]:
+
+def _score_to_result(
+    score: float,
+    uncertainty_epistemic: float = 0.0,
+    uncertainty_aleatoric: float = 0.0,
+) -> dict[str, Any]:
     """Convert a raw pathogenicity probability to a labelled result dict."""
     from src.api.schemas import score_to_classification
+
     classification, confidence = score_to_classification(score)
     return {
         "pathogenicity_score": round(score, 4),
-        "classification":      classification,
-        "confidence":          confidence,
+        "classification": classification,
+        "confidence": confidence,
+        "uncertainty_epistemic": round(uncertainty_epistemic, 6),
+        "uncertainty_aleatoric": round(uncertainty_aleatoric, 6),
     }
