@@ -175,3 +175,38 @@ Local path: G:\My Drive\genomic-variant-data\external\pgc_gwas_summary\
 2. Fix startup script attachment in `gcloud compute instances create`
 3. Regenerate `spliceai_index.parquet` from raw VCF
 4. Evaluate Polars to replace bottleneck pandas ops (Phase 3 milestone)
+
+## Phase 4 Agenda Items
+
+### LiteratureScoutAgent Implementation
+Deferred from Phase 3. When implemented, configure the following watch targets:
+
+**pykan memory fix (KAN re-enablement trigger)**
+- Watch: https://github.com/KindXiaoming/pykan releases
+- Trigger condition: release notes mention memory optimization, large-dataset
+  support, or OOM fixes
+- Action on trigger: test locally with 150K stratified subsample before
+  enabling on GCP; remove unconditional `pop("kan", None)` from
+  `run_phase2_eval.py` if test passes
+- Fallback path (no pykan fix): train KAN on stratified 50K subset only,
+  contributing OOF predictions to meta-learner on that subset
+
+**Database version monitoring (existing scope, document here for completeness)**
+- ClinVar: monthly release cadence, watch for schema changes
+- gnomAD: v4.2+ release, watch for constraint metrics column changes
+- AlphaMissense: watch for hg38 TSV format updates
+- STRING DB: v13 release monitoring
+
+### DataFreshnessAgent Extension
+Add pykan version check hook alongside existing ClinVar/gnomAD freshness checks:
+- Check `pip index versions pykan` against installed version on each run
+- Log new versions to agent state; surface in DataFreshnessAgent report
+- This covers the gap until LiteratureScoutAgent is implemented
+
+### KAN Re-enablement Checklist (when pykan fix detected)
+- [ ] `pip install pykan --upgrade` in local venv
+- [ ] Run `python -c "import kan; m = kan.KAN([78,64,1])"` smoke test
+- [ ] Train on 150K stratified subsample locally, confirm no OOM
+- [ ] Remove `ensemble.base_estimators.pop("kan", None)` from `run_phase2_eval.py`
+- [ ] Add `--skip-kan` flag as optional override (do not hardcode removal again)
+- [ ] Re-run full training on GCP, compare AUROC delta vs Run 7 baseline
