@@ -314,3 +314,75 @@ Non-negotiable. Applies to every future run without exception.
 - Upload failure does not block shutdown — billing stops regardless.
 - Verify upload succeeded after VM stops:
   gcloud storage ls gs://genomic-variant-prod-outputs/runN/models/
+
+---
+
+## Session Lessons — 2026-04-08 (Runs 6 & 7)
+
+These are standing lessons that apply to ALL future runs and ALL projects.
+They are captured here because they were learned through real failures and
+real money spent. They must be consulted before every GCP training run.
+
+### GCP Infrastructure
+- NEVER fall back to CPU. If GPU zone is exhausted, try other zones/regions.
+  Zones to try in order: us-central1-a, us-central1-b, us-east1-b, us-west1-b.
+  Never create an instance without --accelerator.
+- ALWAYS attach startup script at create time via --metadata-from-file.
+  add-metadata on a running VM does NOT re-execute the startup script.
+- ALWAYS verify cuda: True before training starts.
+  If cuda: False — abort immediately, do not train.
+- VM must shut down on ANY exit (success, failure, crash, OOM).
+  Use bash trap, not && chaining. && only fires on success.
+  Pattern: trap 'upload && shutdown' EXIT
+- ALWAYS disable parallel composite uploads before large GCS transfers:
+  gcloud config set storage/parallel_composite_upload_enabled False
+  Parallel uploads cause 401 auth failures on large files when token expires.
+- ALWAYS use gcloud storage CLI, never gsutil for new operations.
+  gsutil does not read project from gcloud config set project.
+- gcloud storage cp -r adds an extra directory nesting level when destination
+  exists. Use individual file copies for critical paths.
+- ALWAYS verify models are in GCS before stopping or deleting a VM.
+  gcloud storage ls gs://genomic-variant-prod-outputs/runN/models/
+- NEVER delete a VM before confirming model upload. Run 6 models were lost
+  this way.
+- Correct data bucket: gs://genomic-variant-prod-outputs/
+  Not gs://genomic-variant-prod-data/ (does not exist).
+
+### Python Environment on Deep Learning VMs
+- System PyTorch lives at /usr/local/lib/python3.12/dist-packages/torch.
+  The venv does NOT have torch by default.
+- Installing torch into the venv fails with libcusparseLt.so.0 missing.
+  Fix: remove pip-installed torch from venv, bridge via .pth file:
+    echo "/usr/local/lib/python3.12/dist-packages" >> ~/venv/lib/python3.12/site-packages/system.pth
+    echo "/usr/lib/python3/dist-packages" >> ~/venv/lib/python3.12/site-packages/system.pth
+- torch-geometric must be installed system-wide:
+    sudo pip3 install torch-geometric torch-scatter torch-sparse \
+      -f https://data.pyg.org/whl/torch-2.7.0+cu128.html \
+      --break-system-packages --quiet
+- sudo pip3 install requires --break-system-packages on Ubuntu 24.04.
+- Do NOT open tmux and immediately run a large pip install — segfaults.
+  Open tmux first, then run commands inside it.
+
+### Startup Script
+- git pull as root fails with "dubious ownership" when repo was cloned as
+  another user. Fix before any git commands:
+    git config --global --add safe.directory /path/to/repo
+- set -euo pipefail causes silent exit on any error. Wrap risky commands
+  in || true or fix root cause before set -e line.
+- Always set PYTHONPATH explicitly in startup script and launch commands.
+
+### Training
+- GNN contributed zero in Runs 6 and 7 — no GPU available.
+  Run 8 is the first run where GNN will actually train.
+- gnomAD v4.1 constraint features (loeuf, syn_z, mis_z, pli_score) are
+  now positions 2-5 in feature importance. Highest-impact feature addition
+  since n_pathogenic_in_gene.
+- ESM-2 has run in stub mode (all-zero esm2_delta_norm) in all runs.
+  Must verify transformers is installed before training.
+- spliceai_index.parquet in GCS is a 29GB raw VCF dump, not a proper index.
+  Omitted from Runs 6 and 7 with no AUROC impact. Needs regeneration.
+- KAN unconditionally removed. Hard C++ OOM at >100K samples, not catchable
+  by Python except. Stays removed until pykan memory fix is released.
+  LiteratureScoutAgent will monitor pykan releases.
+- n_pathogenic_in_gene is #1 feature by large margin in every run.
+  Must always be present in VariantRequest.
