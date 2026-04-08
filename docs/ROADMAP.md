@@ -281,3 +281,36 @@ gnomAD v4.1 constraint features now occupy 4 of the top 6 positions.
 3. Add git safe.directory fix to startup script before git pull
 4. Add .pth bridge to startup script to avoid torch/venv conflict
 5. Budget: at 50% monthly GCP budget after Run 7 — stop VM immediately after training
+
+---
+
+## Standing Infrastructure Rules (Corrected 2026-04-08)
+
+Non-negotiable. Applies to every future run without exception.
+
+### Rule 1: GPU Required
+- Always use a GPU-enabled VM. T4 minimum.
+- Never train on CPU regardless of circumstances.
+- If T4 unavailable in us-central1-a, try us-central1-b, us-east1-b, us-west1-b.
+- Never create an instance without --accelerator.
+- Verify GPU before training: python3 -c "import torch; assert torch.cuda.is_available()"
+- If cuda: False — stop immediately, do not train.
+
+### Rule 2: VM Shuts Down After Training Stops for ANY Reason
+- The VM must stop billing whenever the training process exits,
+  whether by success, failure, crash, OOM, or any other cause.
+- Implement via bash trap, not && chaining.
+- && chaining only shuts down on success — this is insufficient.
+- Correct pattern for every startup script and tmux launch:
+
+  trap 'gsutil -m cp -r models/v1/ gs://genomic-variant-prod-outputs/runN/models/ 2>/dev/null; sudo shutdown -h now' EXIT
+  python scripts/run_phase2_eval.py [args] 2>&1 | tee logs/training.log
+
+- The trap fires on ANY exit from the script, uploading whatever
+  models exist at that point, then shutting down immediately.
+
+### Rule 3: Models Uploaded Before Shutdown
+- The trap always attempts model upload before shutdown.
+- Upload failure does not block shutdown — billing stops regardless.
+- Verify upload succeeded after VM stops:
+  gcloud storage ls gs://genomic-variant-prod-outputs/runN/models/
