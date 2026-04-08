@@ -210,3 +210,32 @@ Add pykan version check hook alongside existing ClinVar/gnomAD freshness checks:
 - [ ] Remove `ensemble.base_estimators.pop("kan", None)` from `run_phase2_eval.py`
 - [ ] Add `--skip-kan` flag as optional override (do not hardcode removal again)
 - [ ] Re-run full training on GCP, compare AUROC delta vs Run 7 baseline
+
+---
+
+## Infrastructure: GPU-Enabled VMs (Run 8+)
+
+**Problem:** n2-highmem-32 is CPU-only. Run 7 trains without GPU acceleration,
+defeating the primary reason for GCP migration.
+
+**Fix for Run 8:** Always include a GPU accelerator in the instance create command.
+The correct flag is `--accelerator` with `--maintenance-policy=TERMINATE`
+(required for GPU instances — MIGRATE is incompatible).
+
+**Verified available in us-central1-a:** nvidia-tesla-t4, nvidia-tesla-t4-vws
+Use `nvidia-tesla-t4` (not vws) for training workloads.
+
+**Run 8 instance create command:**
+gcloud compute instances create genomic-run8 --zone=us-central1-a --machine-type=n1-standard-8 --accelerator=type=nvidia-tesla-t4,count=1 --maintenance-policy=TERMINATE --restart-on-failure --boot-disk-size=200GB --boot-disk-type=pd-ssd --image-project=deeplearning-platform-release --image-family=pytorch-2-7-cu128-ubuntu-2404-nvidia-570 --scopes=cloud-platform --metadata="install-nvidia-driver=True" --service-account=genomic-classifier-sa@genomic-variant-prod.iam.gserviceaccount.com
+
+**GPU options by cost/performance (us-central1-a):**
+- T4 (16GB VRAM): ~$0.35/hr — sufficient for GNN + CatBoost, good value
+- L4 (24GB VRAM): ~$0.70/hr — faster, fits larger batches
+- A100 40GB: ~$2.50/hr — overkill for current ensemble, useful for ESM-2 t12 upgrade
+
+**T4 is the right choice for Run 8.** It will accelerate GNN training and
+ESM-2 inference significantly. n1-standard-8 + T4 costs less per hour than
+n2-highmem-32 and is faster for GPU workloads.
+
+**Note:** `--metadata="install-nvidia-driver=True"` is required on Deep Learning
+VM images to trigger automatic NVIDIA driver installation on first boot.
