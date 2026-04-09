@@ -22,9 +22,7 @@ import hashlib
 import io
 import json
 import logging
-import os
 import re
-import shutil
 import urllib.request
 from collections import Counter
 from datetime import datetime, timezone
@@ -36,9 +34,11 @@ import requests
 
 # Add parent dir to path when running agents/ directly
 import sys
+
 _AL = Path(__file__).resolve().parent.parent
 for _p in (str(_AL), str(_AL / "agents")):
-    if _p not in sys.path: sys.path.insert(0, _p)
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from base_agent import AgentResult, BaseAgent
 from config import (
@@ -100,15 +100,15 @@ class DataFreshnessAgent(BaseAgent):
         self.log.info("Polling upstream data sources …")
 
         findings: dict[str, Any] = {
-            "clinvar":         None,
-            "gnomad":          None,
-            "lovd":            None,
-            "alphamissense":   None,
-            "drift_score":     None,
-            "new_variants":    0,
-            "reclassified":    0,
+            "clinvar": None,
+            "gnomad": None,
+            "lovd": None,
+            "alphamissense": None,
+            "drift_score": None,
+            "new_variants": 0,
+            "reclassified": 0,
             "spark_triggered": False,
-            "errors":          [],
+            "errors": [],
         }
 
         # ---- 1. Poll each source ----------------------------------------
@@ -152,8 +152,11 @@ class DataFreshnessAgent(BaseAgent):
                 clinvar_data["current_dist"],
             )
             self.state.record_drift(findings["drift_score"])
-            self.log.info("JS divergence = %.4f  (threshold %.4f)",
-                          findings["drift_score"], DRIFT_JS_THRESHOLD)
+            self.log.info(
+                "JS divergence = %.4f  (threshold %.4f)",
+                findings["drift_score"],
+                DRIFT_JS_THRESHOLD,
+            )
 
         # ---- 4. Decide whether to trigger Spark --------------------------
         should_ingest = self._should_trigger_ingest(findings)
@@ -164,20 +167,25 @@ class DataFreshnessAgent(BaseAgent):
                     f"Trigger Spark ingest? "
                     f"({findings['new_variants']} new variants, "
                     f"drift={findings.get('drift_score', 'n/a'):.4f})"
-                    if findings.get("drift_score") else
-                    f"Trigger Spark ingest? ({findings['new_variants']} new variants)"
+                    if findings.get("drift_score")
+                    else f"Trigger Spark ingest? ({findings['new_variants']} new variants)"
                 )
                 if not approved:
-                    self.state.add_pending_review({
-                        "reason":   "Spark ingest blocked pending human approval",
-                        "details":  findings,
-                        "agent":    self.name,
-                    })
+                    self.state.add_pending_review(
+                        {
+                            "reason": "Spark ingest blocked pending human approval",
+                            "details": findings,
+                            "agent": self.name,
+                        }
+                    )
                     return AgentResult(
                         success=True,
                         action="poll_and_flag",
-                        details={**findings, "spark_triggered": False,
-                                 "queued_for_review": True},
+                        details={
+                            **findings,
+                            "spark_triggered": False,
+                            "queued_for_review": True,
+                        },
                     )
 
             spark_result = self.trigger_spark_ingest(findings)
@@ -213,12 +221,12 @@ class DataFreshnessAgent(BaseAgent):
         self.log.info("Polling ClinVar FTP …")
 
         result: dict = {
-            "new_release":    False,
-            "release_date":   None,
-            "new_variants":   0,
-            "reclassified":   0,
-            "current_dist":   None,
-            "previous_dist":  None,
+            "new_release": False,
+            "release_date": None,
+            "new_variants": 0,
+            "reclassified": 0,
+            "current_dist": None,
+            "previous_dist": None,
         }
 
         # Connect to FTP and find the latest dated VCF file
@@ -232,7 +240,8 @@ class DataFreshnessAgent(BaseAgent):
             ftp.quit()
 
             vcf_files = [
-                e for e in entries
+                e
+                for e in entries
                 if re.search(r"ClinVar.*\.vcf\.gz$", e, re.IGNORECASE)
                 and "weekly" not in e.lower()
             ]
@@ -251,27 +260,32 @@ class DataFreshnessAgent(BaseAgent):
 
             last_seen = self.state.get("clinvar_last_seen_date")
             if last_seen and last_seen >= release_date_str:
-                self.log.info("ClinVar: no new release (last=%s, latest=%s)",
-                              last_seen, release_date_str)
+                self.log.info(
+                    "ClinVar: no new release (last=%s, latest=%s)",
+                    last_seen,
+                    release_date_str,
+                )
                 return result
 
             result["new_release"] = True
             self.log.info("ClinVar: new release detected → %s", release_date_str)
 
         except ftplib.all_errors as exc:
-            self.log.warning("FTP connection failed (%s); falling back to HTTP summary.", exc)
+            self.log.warning(
+                "FTP connection failed (%s); falling back to HTTP summary.", exc
+            )
             result["new_release"] = True  # assume new if we can't check
 
         # Download variant summary (tab-delimited, gzipped) for distribution
         previous_dist = self._load_previous_clinvar_dist()
-        current_dist  = self._download_clinvar_summary_dist()
+        current_dist = self._download_clinvar_summary_dist()
 
-        result["current_dist"]  = current_dist
+        result["current_dist"] = current_dist
         result["previous_dist"] = previous_dist
 
         if current_dist and previous_dist:
-            new_total     = sum(current_dist.values())
-            prev_total    = sum(previous_dist.values())
+            new_total = sum(current_dist.values())
+            prev_total = sum(previous_dist.values())
             result["new_variants"] = max(0, new_total - prev_total)
 
         return result
@@ -290,7 +304,7 @@ class DataFreshnessAgent(BaseAgent):
             counts: Counter = Counter()
             with gzip.open(dest, "rt", encoding="utf-8", errors="replace") as fh:
                 for i, line in enumerate(fh):
-                    if i == 0:   # skip header
+                    if i == 0:  # skip header
                         continue
                     cols = line.split("\t")
                     if len(cols) < 7:
@@ -423,8 +437,9 @@ class DataFreshnessAgent(BaseAgent):
         result = {"new_release": False, "etag": None}
 
         try:
-            resp = requests.head(ALPHAMISSENSE_MANIFEST, timeout=15,
-                                 allow_redirects=True)
+            resp = requests.head(
+                ALPHAMISSENSE_MANIFEST, timeout=15, allow_redirects=True
+            )
             etag = resp.headers.get("ETag") or resp.headers.get("x-goog-hash")
             result["etag"] = etag
             last_seen = self.state.get("alphamissense_last_seen")
@@ -457,6 +472,7 @@ class DataFreshnessAgent(BaseAgent):
         q = q / q.sum() if q.sum() > 0 else q
 
         m = 0.5 * (p + q)
+
         # KL divergence with numerical stability
         def kl(a, b):
             mask = (a > 0) & (b > 0)
@@ -469,17 +485,21 @@ class DataFreshnessAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     def _should_trigger_ingest(self, findings: dict) -> bool:
-        new_v  = findings.get("new_variants", 0)
-        drift  = findings.get("drift_score") or 0.0
+        new_v = findings.get("new_variants", 0)
+        drift = findings.get("drift_score") or 0.0
         am_new = (findings.get("alphamissense") or {}).get("new_release", False)
 
         if new_v >= MIN_NEW_VARIANTS_FOR_INGEST:
-            self.log.info("Ingest trigger: new_variants=%d ≥ threshold=%d",
-                          new_v, MIN_NEW_VARIANTS_FOR_INGEST)
+            self.log.info(
+                "Ingest trigger: new_variants=%d ≥ threshold=%d",
+                new_v,
+                MIN_NEW_VARIANTS_FOR_INGEST,
+            )
             return True
         if drift >= DRIFT_JS_THRESHOLD:
-            self.log.info("Ingest trigger: drift=%.4f ≥ threshold=%.4f",
-                          drift, DRIFT_JS_THRESHOLD)
+            self.log.info(
+                "Ingest trigger: drift=%.4f ≥ threshold=%.4f", drift, DRIFT_JS_THRESHOLD
+            )
             return True
         if am_new:
             self.log.info("Ingest trigger: new AlphaMissense release.")
@@ -502,20 +522,29 @@ class DataFreshnessAgent(BaseAgent):
             from google.cloud import dataproc_v1  # type: ignore
 
             job_client = dataproc_v1.JobControllerClient(
-                client_options={"api_endpoint": f"{GCP_REGION}-dataproc.googleapis.com:443"}
+                client_options={
+                    "api_endpoint": f"{GCP_REGION}-dataproc.googleapis.com:443"
+                }
             )
             job = {
                 "placement": {"cluster_name": DATAPROC_CLUSTER_NAME},
                 "pyspark_job": {
                     "main_python_file_uri": f"{DATAPROC_BUCKET}/jobs/vcf_ingest.py",
                     "args": [
-                        "--sources", ",".join(
-                            s for s, v in {
-                                "clinvar":  findings.get("clinvar", {}).get("new_release"),
-                                "gnomad":   findings.get("gnomad", {}).get("new_release"),
-                                "lovd":     bool(findings.get("lovd", {}).get("new_variants")),
-                            }.items() if v
-                        )
+                        "--sources",
+                        ",".join(
+                            s
+                            for s, v in {
+                                "clinvar": findings.get("clinvar", {}).get(
+                                    "new_release"
+                                ),
+                                "gnomad": findings.get("gnomad", {}).get("new_release"),
+                                "lovd": bool(
+                                    findings.get("lovd", {}).get("new_variants")
+                                ),
+                            }.items()
+                            if v
+                        ),
                     ],
                 },
             }
@@ -527,12 +556,32 @@ class DataFreshnessAgent(BaseAgent):
             return {"submitted": True, "job_id": job_id, "backend": "dataproc"}
 
         except ImportError:
-            self.log.warning("google-cloud-dataproc not installed; falling back to local spark-submit.")
+            self.log.warning(
+                "google-cloud-dataproc not installed; falling back to local spark-submit."
+            )
         except Exception as exc:
-            self.log.warning("Dataproc submission failed (%s); falling back to local.", exc)
+            self.log.warning(
+                "Dataproc submission failed (%s); falling back to local.", exc
+            )
+
+        # POST_DOWNLOAD_HOOKS — must run before Spark ETL reads the data.
+        # Hook 1 (mandatory): patch ClinVar alleles.
+        #   variant_summary.txt has ref="na"/alt="na" for nearly all rows.
+        #   Real alleles must be joined from clinvar.vcf.gz before ETL or
+        #   consequence-based features are silently zeroed and AUROC collapses.
+        POST_DOWNLOAD_HOOKS = [
+            self._hook_patch_clinvar_alleles,
+            self._hook_validate_vcf_checksums,
+        ]
+        for hook in POST_DOWNLOAD_HOOKS:
+            try:
+                hook(findings)
+            except Exception as exc:
+                self.log.warning("Post-download hook %s failed: %s", hook.__name__, exc)
 
         # Local fallback: spark-submit
         import subprocess
+
         spark_script = Path(__file__).parents[2] / "pipelines" / "vcf_ingest.py"
         if not spark_script.exists():
             self.log.error("Spark script not found at %s", spark_script)
@@ -547,34 +596,135 @@ class DataFreshnessAgent(BaseAgent):
             self.log.error("spark-submit not found on PATH.")
             return {"submitted": False, "error": "spark not on PATH"}
 
-    # ------------------------------------------------------------------
-    # Reclassification flagging
-    # ------------------------------------------------------------------
-
     def _flag_reclassifications(self, findings: dict) -> None:
         """
         Add a pending review item when the reclassification rate is high.
         The Orchestrator surfaces this to the operator.
         """
-        reclass_n    = findings.get("reclassified", 0)
-        new_total    = findings.get("new_variants", 1)
+        reclass_n = findings.get("reclassified", 0)
+        new_total = findings.get("new_variants", 1)
         reclass_rate = reclass_n / new_total
 
         self.log.warning(
             "High reclassification rate: %.1f%% (%d / %d variants)",
-            reclass_rate * 100, reclass_n, new_total,
+            reclass_rate * 100,
+            reclass_n,
+            new_total,
         )
-        self.state.add_pending_review({
-            "reason":            "High ClinVar reclassification rate",
-            "reclassification_rate": reclass_rate,
-            "reclassified_n":    reclass_n,
-            "new_variants_n":    new_total,
-            "agent":             self.name,
-            "action_required":   (
-                "Review reclassified variants before next training run. "
-                "Check whether label noise exceeds EWC tolerance."
-            ),
-        })
+        self.state.add_pending_review(
+            {
+                "reason": "High ClinVar reclassification rate",
+                "reclassification_rate": reclass_rate,
+                "reclassified_n": reclass_n,
+                "new_variants_n": new_total,
+                "agent": self.name,
+                "action_required": (
+                    "Review reclassified variants before next training run. "
+                    "Check whether label noise exceeds EWC tolerance."
+                ),
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Post-download hooks (run before Spark ETL)
+    # ------------------------------------------------------------------
+
+    def _hook_patch_clinvar_alleles(self, findings: dict) -> None:
+        """
+        Hook 1 — MANDATORY: join real ref/alt alleles from clinvar.vcf.gz
+        into the variant_summary.txt before Spark ETL reads it.
+
+        Without this patch, variant_summary.txt has ref='na'/alt='na' for
+        nearly all rows. Consequence-based features (is_missense, is_splice,
+        consequence_severity, etc.) will be silently zeroed and AUROC collapses
+        from ~0.98 to ~0.70.
+
+        Calls scripts/patch_clinvar_alleles.py which must be on PATH or
+        reachable relative to the repo root.
+        """
+        import subprocess
+
+        patch_script = (
+            Path(__file__).parents[2] / "scripts" / "patch_clinvar_alleles.py"
+        )
+        if not patch_script.exists():
+            self.log.warning(
+                "patch_clinvar_alleles.py not found at %s — "
+                "allele data will be missing from next ETL run.",
+                patch_script,
+            )
+            return
+
+        clinvar_summary = RAW_DATA_DIR / "clinvar_variant_summary.txt.gz"
+        clinvar_vcf = RAW_DATA_DIR / "clinvar.vcf.gz"
+
+        if not clinvar_summary.exists():
+            self.log.info("ClinVar summary not downloaded yet — skipping allele patch.")
+            return
+        if not clinvar_vcf.exists():
+            self.log.warning(
+                "clinvar.vcf.gz not found at %s — "
+                "allele patch cannot run. Download from NCBI FTP.",
+                clinvar_vcf,
+            )
+            return
+
+        self.log.info("Running ClinVar allele patch (Hook 1) …")
+        cmd = [
+            "python",
+            str(patch_script),
+            "--summary",
+            str(clinvar_summary),
+            "--vcf",
+            str(clinvar_vcf),
+            "--output",
+            str(clinvar_summary),  # patch in-place
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode == 0:
+            self.log.info("ClinVar allele patch complete.")
+        else:
+            self.log.error(
+                "ClinVar allele patch failed (exit %d):\n%s",
+                result.returncode,
+                result.stderr[-500:],
+            )
+            raise RuntimeError(
+                f"patch_clinvar_alleles.py failed: {result.stderr[-200:]}"
+            )
+
+    def _hook_validate_vcf_checksums(self, findings: dict) -> None:
+        """
+        Hook 2 — validate MD5/SHA256 checksums of downloaded VCF files.
+        Logs a warning if checksums are unavailable; never blocks ingest.
+        """
+        self.log.info("Validating VCF checksums (Hook 2) …")
+        vcf_files = list(RAW_DATA_DIR.glob("*.vcf.gz"))
+        for vcf in vcf_files:
+            md5_file = vcf.with_suffix(".gz.md5")
+            if not md5_file.exists():
+                self.log.debug("No checksum file for %s — skipping.", vcf.name)
+                continue
+            expected = md5_file.read_text().strip().split()[0]
+            h = hashlib.md5()
+            with open(vcf, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            actual = h.hexdigest()
+            if actual == expected:
+                self.log.info("Checksum OK: %s", vcf.name)
+            else:
+                self.log.error(
+                    "CHECKSUM MISMATCH for %s: expected=%s actual=%s — "
+                    "file may be corrupted. Re-download before ETL.",
+                    vcf.name,
+                    expected,
+                    actual,
+                )
+
+    # ------------------------------------------------------------------
+    # State updates
+    # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # State updates
