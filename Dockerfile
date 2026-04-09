@@ -57,7 +57,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create an isolated virtualenv
 RUN python -m venv /opt/venv
-ENV MODEL_PATH=models/phase4_pipeline.joblib
 
 COPY requirements.txt requirements-api.txt requirements-api.lock* ./
 
@@ -146,7 +145,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Re-use builder venv but install full training stack on top
 COPY --from=builder /opt/venv /opt/venv
-ENV MODEL_PATH=models/phase4_pipeline.joblib \
+ENV PATH=/opt/venv/bin:$PATH \
+    MODEL_PATH=models/phase4_pipeline.joblib \
     JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 
 WORKDIR /app
@@ -154,16 +154,19 @@ WORKDIR /app
 # Full source tree for training
 COPY . .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # Train with the canonical Phase 2 config
 CMD ["python", "scripts/run_phase2_eval.py", \
-     "--clinvar",       "data/processed/clinvar_grch38.parquet", \
-     "--alphamissense", "data/external/alphamissense/AlphaMissense_hg38.tsv.gz", \
-     "--gnomad",        "data/processed/gnomad_v4_exomes.parquet", \
-     "--skip-nn", "--skip-svm", \
+     "--clinvar",           "data/processed/clinvar_grch38.parquet", \
+     "--gnomad",            "data/processed/gnomad_v4_exomes.parquet", \
+     "--gnomad-constraint", "data/external/gnomad/gnomad.v4.1.constraint_metrics.tsv", \
+     "--alphamissense",     "data/external/alphamissense/AlphaMissense_hg38.tsv.gz", \
+     "--string-db",         "data/external/string/9606.protein.links.detailed.v12.0.txt.gz", \
+     "--skip-nn", "--skip-svm", "--skip-kan", \
      "--min-review-tier", "2", \
-     "--output",        "outputs/latest"]
+     "--n-folds", "5", \
+     "--output", "outputs/latest"]
 
 
 
