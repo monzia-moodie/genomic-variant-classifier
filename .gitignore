@@ -129,3 +129,10 @@ data/external/dbnsfp/
 experiments/**/*.joblib
 experiments/**/*.cbm
 experiments/**/*.pkl
+
+# Local GCP command files
+create_run8.cmd
+create_run*.cmd
+
+# Secrets directory
+secrets/
