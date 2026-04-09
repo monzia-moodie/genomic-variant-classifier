@@ -26,4 +26,4 @@ Always check file size before launching a long-running parse job.
 Add a pre-flight file size check to build_spliceai_index.py for future runs.
 
 ## Status
-RESOLVED — index built, pending rename and GCS upload
+RESOLVED — index built (336.8MB, 45.5M variants), renamed, correct file uploaded to GCS 2026-04-09T23:15Z
