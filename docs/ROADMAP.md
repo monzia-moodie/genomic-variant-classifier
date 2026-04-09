@@ -403,3 +403,24 @@ Justification to use:
 
 Run 8 is fully staged and ready — single command to launch once quota approved.
 create_run8.cmd contains the L4 instance create command (g2-standard-8).
+
+---
+
+## Phase 3 Milestone: Polars Integration — Approved 2026-04-09
+
+Benchmark result (500K variants, 20K genes, 3-run average):
+  Pandas merge: 403.4 ms
+  Polars join:  123.1 ms
+  Speedup:      3.3x
+
+Decision: Polars integration approved. Exceeds 3x threshold.
+
+Target operations (in priority order):
+  1. gnomAD constraint join in real_data_prep.py
+  2. ClinVar annotation merge
+  3. Feature engineering fillna/astype chain in engineer_features()
+
+Implementation notes:
+  - Use pl.from_pandas() / .to_pandas() at ETL boundaries
+  - Keep pandas for sklearn/model interfaces (no conversion overhead in hot path)
+  - Benchmark script: scripts/benchmark_polars.py
