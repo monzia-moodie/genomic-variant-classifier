@@ -136,3 +136,8 @@ create_run*.cmd
 
 # Secrets directory
 secrets/
+
+# Agent layer runtime artifacts
+agent_layer/agent_state.json
+agent_layer/out.txt
+agent_layer/logs/

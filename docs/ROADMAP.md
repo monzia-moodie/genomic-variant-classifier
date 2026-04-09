@@ -450,3 +450,67 @@ Key technical note: paper uses tanh((x-c)/s) robust preprocessing
 before arccos — this must be preserved in the wrapper. Classification
 extension is listed in paper's Further Work, so predict_proba requires
 care around the calibration boundary.
+
+---
+
+## Phase 4 Foundation — Inter-Agent Message Bus (Completed 2026-04-09)
+
+Implemented an OpenClaw-inspired agent-to-agent communication layer that allows
+the four agents to coordinate semi-autonomously when an update in one affects
+the behaviour or output of another. This was a planned Phase 4/5 deliverable.
+
+### Architecture
+
+A typed, persistent MessageBus backed by SharedState JSON (atomic-write, crash-safe).
+Four canonical message subjects:
+
+  DATA_UPDATED            DataFreshness  → TrainingLifecycle
+  CHECKPOINT_READY        TrainingLifecycle → Interpretability
+  FEATURE_INSTABILITY     Interpretability  → TrainingLifecycle
+  FEATURE_CANDIDATE_ADDED LiteratureScout   → TrainingLifecycle
+
+Messages requiring consequential downstream actions (DATA_UPDATED, CHECKPOINT_READY)
+gate on REQUIRE_HUMAN_APPROVAL before the receiving agent acts. FEATURE_INSTABILITY
+and FEATURE_CANDIDATE_ADDED are informational (no approval gate).
+
+### Files added / modified
+
+  agent_layer/message_bus.py              NEW — core bus (send/approve/reject/history)
+  agent_layer/shared_state.py             MOD — agent_messages key + migration
+  agent_layer/orchestrator.py             MOD — pre/post-run message logging + delegates
+  agent_layer/run_agents.py               MOD — --inbox/--pending-msgs/--approve-msg/--reject-msg/--msg-history
+  agent_layer/agents/base_agent.py        MOD — send_message/read_inbox/get_actionable inherited
+  agent_layer/agents/data_freshness_agent.py      MOD — emits DATA_UPDATED on change
+  agent_layer/agents/training_lifecycle_agent.py  MOD — receives all 3 inbound subjects; emits CHECKPOINT_READY
+  agent_layer/agents/interpretability_agent.py    MOD — receives CHECKPOINT_READY; emits FEATURE_INSTABILITY
+  agent_layer/agents/literature_scout_agent.py    MOD — emits FEATURE_CANDIDATE_ADDED per new candidate
+  agent_layer/test_message_bus.py         NEW — 34-test suite, 34/34 passing on Python 3.14.3
+
+### Verified live
+
+Full pipeline (`--pipeline full --dry-run`) runs all 4 agents cleanly. DataFreshness
+connects to real ClinVar FTP, gnomAD GCS, and AlphaMissense endpoints.
+
+### Remaining for full Phase 4 activation
+
+  - ewc_utils importable from agent_layer/ (copy or path addition)
+  - feedparser installed (`pip install feedparser --trusted-host pypi.org`)
+  - Real training checkpoint in models/checkpoints/ (from next Run 9 training run)
+
+---
+
+## SpliceAI Index — Completed 2026-04-09
+
+Build stats:
+  Input:    data/external/spliceai/spliceai_scores.masked.snv.hg38.vcf.gz (28.8 GB)
+  Lines:    3,458,738,010 (full hg38 unmasked VCF — not just masked SNVs)
+  Written:  45,549,300 variants (score >= 0.1)
+  Size:     336.8 MB parquet (snappy compressed) / 28.7 GiB on GCS
+  Runtime:  440 min (7h 20min)
+  Chroms:   1-22, X, Y (complete)
+  Score:    0.1 - 1.0
+  GCS:      gs://genomic-variant-prod-outputs/run6/data/data/processed/spliceai_index.parquet
+
+Note: File was misnamed "masked.snv" — it is the full genome-wide unmasked
+VCF including indels. This is better: Run 8 will have splice site scoring
+for all variant types across all chromosomes.
