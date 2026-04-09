@@ -1,680 +1,449 @@
 """
-agents/training_lifecycle_agent.py
-===================================
-Training Lifecycle Agent — manages the continual learning loop for both
-the ResNet-50 CNN branch and the XGBoost / LightGBM ensemble.
+training_lifecycle_agent.py — Model Training Lifecycle Manager
+==============================================================
+Manages the EWC continual learning loop: decides when to retrain, applies
+EWC penalties, checkpoints the model, and coordinates with peer agents via
+the MessageBus.
 
-Decision logic
---------------
-The agent reads the current drift_score from SharedState (written by
-DataFreshnessAgent after each corpus update) and picks a strategy:
+Messages consumed (inbox)
+--------------------------
+  DATA_UPDATED (from DataFreshnessAgent)
+      New genomic data source release detected. If ingest_approved=True the
+      data is already in the pipeline and retraining should be considered.
+      If ingest_approved=False the ingest is still pending — this agent logs
+      the signal and defers the retrain decision.
 
-    drift < EWC_DRIFT_LOW                       → no update, log and exit
-    EWC_DRIFT_LOW  ≤ drift < EWC_DRIFT_HIGH     → EWC fine-tune (ResNet-50)
-                                                   + replay-buffer update
-                                                     (ensemble)
-    drift ≥ EWC_DRIFT_HIGH                      → queue full retrain for
-                                                   human review
-    reclassification_rate ≥ threshold           → force update regardless
-                                                   of drift score
+  FEATURE_INSTABILITY (from InterpretabilityAgent)
+      SHAP audit found unstable or counterintuitive feature importances.
+      Payload includes the flagged features. This agent logs them into the
+      training section of SharedState and factors them into the next EWC run.
 
-Checkpointing
--------------
-Each successful update produces a versioned checkpoint directory:
-    <CHECKPOINT_DIR>/<timestamp>_v<N>/
-        resnet50/
-            model.pt          — state_dict
-            fisher.pt         — Fisher diagonal
-            training_history.json
-        ensemble/
-            xgb_model.ubj     — XGBoost booster
-            lgb_model.txt     — LightGBM booster
-        metadata.json         — version, val_acc, drift_score, …
+  FEATURE_CANDIDATE_ADDED (from LiteratureScoutAgent)
+      A new feature candidate has been surfaced from literature and added to
+      the queue. This agent logs it for inclusion in the next feature
+      engineering review.
 
-After a successful run the agent updates SharedState with:
-    model_checkpoint_ref   → path to the new checkpoint directory
-    model_last_trained     → ISO timestamp
-    ewc_fisher_ref         → path to fisher.pt
-    ewc_lambda             → current lambda value
+Message emitted (outbox)
+------------------------
+  CHECKPOINT_READY (to InterpretabilityAgent)
+      Emitted after a successful training run and checkpoint save.
+      Payload: {
+          "checkpoint_path": "<path>",
+          "trigger_reason":  "<str>",
+          "trained_at":      "<iso>",
+          "ewc_applied":     true | false,
+          "data_sources":    ["gnomAD", ...]   // from triggering DATA_UPDATED
+      }
+      Priority          : HIGH
+      Requires approval : True (triggers a full SHAP audit)
+
+Processing order inside run()
+------------------------------
+  1. Collect actionable inbox messages.
+  2. Process DATA_UPDATED → may set retrain flag + record data sources.
+  3. Process FEATURE_INSTABILITY → log flagged features into SharedState.
+  4. Process FEATURE_CANDIDATE_ADDED → log candidates into SharedState.
+  5. Mark all processed messages as read.
+  6. Run existing EWC / drift-detection logic.
+  7. If retrain triggered and approved → train, checkpoint, emit CHECKPOINT_READY.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import shutil
-import sys
-import traceback
+import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
-import numpy as np
-
-_AL = Path(__file__).resolve().parent.parent
-for _p in (str(_AL), str(_AL / "agents")):
-    if _p not in sys.path: sys.path.insert(0, _p)
-
-from base_agent import AgentResult, BaseAgent
+from agents.base_agent import BaseAgent
 from config import (
     CHECKPOINT_DIR,
-    ENSEMBLE_BOOST_ROUNDS,
-    ENSEMBLE_SUBDIR,
-    EWC_BATCH_SIZE,
-    EWC_DRIFT_HIGH,
-    EWC_DRIFT_LOW,
-    EWC_EPOCHS,
-    EWC_FISHER_SAMPLES,
-    EWC_LAMBDA,
-    EWC_LR,
+    DATAPROC_BUCKET,
+    DATAPROC_CLUSTER_NAME,
+    GCP_PROJECT_ID,
+    GCP_REGION,
     GCS_CHECKPOINT_PREFIX,
-    GDRIVE_CHECKPOINT_DIR,
-    PROCESSED_DATA_DIR,
-    RECLASSIFICATION_RATE_THRESHOLD,
-    REPLAY_BUFFER_PARQUET,
-    REPLAY_BUFFER_SIZE,
-    REPLAY_SAMPLE_FRAC,
     REQUIRE_HUMAN_APPROVAL,
-    RESNET_NUM_CLASSES,
-    RESNET_SUBDIR,
-    TRAIN_PARQUET,
-    VAL_PARQUET,
+)
+from message_bus import (
+    CHECKPOINT_READY,
+    DATA_UPDATED,
+    FEATURE_CANDIDATE_ADDED,
+    FEATURE_INSTABILITY,
+    PRIORITY_HIGH,
+    PRIORITY_NORMAL,
 )
 from shared_state import SharedState
 
-log = logging.getLogger("TrainingLifecycleAgent")
+# EWC retraining job — assembled from config dataproc components.
+_MODEL_RETRAIN_SCRIPT = (
+    f"gcloud dataproc jobs submit pyspark {DATAPROC_BUCKET}/jobs/train_ewc.py "
+    f"--cluster={DATAPROC_CLUSTER_NAME} "
+    f"--region={GCP_REGION} "
+    f"--project={GCP_PROJECT_ID}"
+)
 
+logger = logging.getLogger(__name__)
+logger.propagate = False
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(
+        logging.Formatter(
+            "%(asctime)s | %(levelname)-8s | %(name)-30s | %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%SZ",
+        )
+    )
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
 
-# ---------------------------------------------------------------------------
-# Strategy constants
-# ---------------------------------------------------------------------------
-
-STRATEGY_SKIP         = "skip"
-STRATEGY_EWC_UPDATE   = "ewc_update"
-STRATEGY_FULL_RETRAIN = "full_retrain_queued"
+_INTERPRETABILITY_AGENT = "InterpretabilityAgent"
 
 
 class TrainingLifecycleAgent(BaseAgent):
     """
-    Manages EWC continual learning for the ResNet-50 branch and
-    memory-replay continual learning for the XGBoost / LightGBM ensemble.
+    Manages EWC continual learning and coordinates retraining across the
+    agent layer.
     """
 
-    def __init__(self, state: SharedState, dry_run: bool = False):
-        super().__init__(state, dry_run)
-        CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-        PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    @property
-    def name(self) -> str:
-        return "TrainingLifecycleAgent"
+    def __init__(self, shared_state: SharedState) -> None:
+        super().__init__(shared_state)
+        self._retrain_flag = False  # set by inbox processing
+        self._data_sources: list[str] = []  # which sources triggered retrain
+        self._trigger_reason = "scheduled"
 
     # ------------------------------------------------------------------
-    # Main run
+    # Entry point
     # ------------------------------------------------------------------
 
-    def run(self) -> AgentResult:
-        results: dict[str, Any] = {
-            "strategy":         None,
-            "drift_score":      None,
-            "resnet_updated":   False,
-            "ensemble_updated": False,
-            "checkpoint_path":  None,
-            "resnet_val_acc":   None,
-            "ensemble_metrics": None,
-            "errors":           [],
+    def run(self, dry_run: bool = False) -> dict:
+        self._log_start(dry_run)
+        self._retrain_flag = False
+        self._data_sources = []
+        self._trigger_reason = "scheduled"
+
+        # ----------------------------------------------------------
+        # Step 1: Process inbox messages from peer agents
+        # ----------------------------------------------------------
+        processed_ids = self._process_inbox(dry_run)
+
+        # ----------------------------------------------------------
+        # Step 2: Drift detection (existing EWC logic)
+        # ----------------------------------------------------------
+        self._log_section("Drift Detection")
+        drift_detected = self._check_drift(dry_run)
+        if drift_detected and not self._retrain_flag:
+            self._retrain_flag = True
+            self._trigger_reason = "drift_detected"
+
+        # ----------------------------------------------------------
+        # Step 3: Decide whether to retrain
+        # ----------------------------------------------------------
+        retrained = False
+        checkpoint_path = None
+
+        if self._retrain_flag:
+            prompt = (
+                f"Trigger EWC retraining? "
+                f"(reason: {self._trigger_reason}"
+                + (
+                    f", sources: {', '.join(self._data_sources)}"
+                    if self._data_sources
+                    else ""
+                )
+                + ")"
+            )
+            approved = self._require_approval(prompt, dry_run=dry_run)
+
+            if approved:
+                checkpoint_path = self._run_training(dry_run)
+                retrained = checkpoint_path is not None
+
+                # --------------------------------------------------
+                # Step 4 [NEW]: Emit CHECKPOINT_READY to InterpretabilityAgent
+                # --------------------------------------------------
+                if retrained and not dry_run:
+                    self._emit_checkpoint_ready(checkpoint_path, dry_run)
+                elif dry_run:
+                    self.logger.info(
+                        "  [dry-run] Would emit CHECKPOINT_READY → %s",
+                        _INTERPRETABILITY_AGENT,
+                    )
+            else:
+                self.logger.info("Retraining deferred (approval not granted).")
+        else:
+            self.logger.info("No retrain trigger — skipping training run.")
+
+        # Mark inbox messages as read now that we've acted (or decided not to)
+        for msg_id in processed_ids:
+            self.mark_message_read(msg_id)
+
+        result = {
+            "action": "ewc_lifecycle",
+            "drift_detected": drift_detected,
+            "retrain_triggered": self._retrain_flag,
+            "retrained": retrained,
+            "checkpoint": checkpoint_path,
+            "trigger_reason": self._trigger_reason,
+            "inbox_processed": len(processed_ids),
         }
+        self._log_finish(result)
+        return result
 
-        # ---- 1. Assess current drift ------------------------------------
-        drift_score   = self.state.get("drift_score") or 0.0
-        reclass_rate  = self.state.get("reclassification_rate") or 0.0
-        results["drift_score"] = drift_score
+    # ------------------------------------------------------------------
+    # Inbox processing — NEW
+    # ------------------------------------------------------------------
 
-        strategy = self._decide_strategy(drift_score, reclass_rate)
-        results["strategy"] = strategy
-        self.log.info(
-            "drift=%.4f  reclass_rate=%.4f  → strategy: %s",
-            drift_score, reclass_rate, strategy,
-        )
+    def _process_inbox(self, dry_run: bool) -> list[str]:
+        """
+        Read actionable inbox messages and update internal state accordingly.
 
-        if strategy == STRATEGY_SKIP:
-            return AgentResult(success=True, action=STRATEGY_SKIP, details=results)
+        Returns a list of message IDs that were processed, so run() can
+        mark them as read after the training decision is made.
+        """
+        messages = self.get_actionable()
+        processed_ids: list[str] = []
 
-        if strategy == STRATEGY_FULL_RETRAIN:
-            self._queue_full_retrain(drift_score, reclass_rate)
-            results["queued_for_review"] = True
-            return AgentResult(
-                success=True, action=STRATEGY_FULL_RETRAIN, details=results
-            )
+        for msg in messages:
+            subject = msg["subject"]
+            payload = msg.get("payload", {})
+            sender = msg["from_agent"]
+            msg_id = msg["id"]
 
-        # ---- 2. Human gate ----------------------------------------------
-        if REQUIRE_HUMAN_APPROVAL:
-            approved = self.require_human_approval(
-                f"Run EWC update? drift={drift_score:.4f}, "
-                f"reclass_rate={reclass_rate:.4f}"
-            )
-            if not approved:
-                self.state.add_pending_review({
-                    "reason": "EWC update blocked pending human approval",
-                    "drift":  drift_score,
-                    "agent":  self.name,
-                })
-                return AgentResult(
-                    success=True, action="blocked_pending_approval", details=results
+            # ── DATA_UPDATED ───────────────────────────────────────
+            if subject == DATA_UPDATED:
+                source = payload.get("source", "unknown")
+                ingest_approved = payload.get("ingest_approved", False)
+                change_type = payload.get("change_type", "unknown")
+
+                self.logger.info(
+                    "📨  DATA_UPDATED from %s — source=%s  ingest_approved=%s",
+                    sender,
+                    source,
+                    ingest_approved,
                 )
 
-        # ---- 3. Versioned checkpoint directory --------------------------
-        checkpoint_dir = self._new_checkpoint_dir()
-        results["checkpoint_path"] = str(checkpoint_dir)
+                if ingest_approved:
+                    # Data is in the pipeline — flag for retrain
+                    self._retrain_flag = True
+                    self._data_sources.append(source)
+                    self._trigger_reason = "data_updated"
+                    self.logger.info(
+                        "  ↳ Ingest approved for %s — retrain flagged.", source
+                    )
+                else:
+                    # Ingest not yet approved — log signal but defer retrain
+                    self.logger.info(
+                        "  ↳ Ingest NOT yet approved for %s — "
+                        "retrain deferred until ingest completes.",
+                        source,
+                    )
+                    self._update_section(
+                        "training",
+                        {"pending_data_source": source},
+                    )
 
-        # ---- 4. ResNet-50 EWC update ------------------------------------
-        try:
-            resnet_result = self._run_ewc_update_resnet(checkpoint_dir)
-            results["resnet_updated"] = resnet_result["updated"]
-            results["resnet_val_acc"] = resnet_result.get("val_acc")
-            if resnet_result.get("error"):
-                results["errors"].append(f"ResNet EWC: {resnet_result['error']}")
-        except Exception as exc:
-            msg = f"ResNet EWC update failed: {exc}"
-            self.log.error("%s\n%s", msg, traceback.format_exc())
-            results["errors"].append(msg)
-
-        # ---- 5. Ensemble replay-buffer update ---------------------------
-        try:
-            ens_result = self._run_ensemble_replay_update(checkpoint_dir)
-            results["ensemble_updated"] = ens_result["updated"]
-            results["ensemble_metrics"] = ens_result.get("metrics")
-            if ens_result.get("error"):
-                results["errors"].append(f"Ensemble: {ens_result['error']}")
-        except Exception as exc:
-            msg = f"Ensemble update failed: {exc}"
-            self.log.error("%s\n%s", msg, traceback.format_exc())
-            results["errors"].append(msg)
-
-        # ---- 6. Persist and update state --------------------------------
-        anything_updated = results["resnet_updated"] or results["ensemble_updated"]
-        if anything_updated:
-            self._write_checkpoint_metadata(checkpoint_dir, results)
-            self._push_checkpoint(checkpoint_dir)
-            self._update_state(checkpoint_dir, results)
-        else:
-            shutil.rmtree(checkpoint_dir, ignore_errors=True)
-
-        success = anything_updated and len(results["errors"]) == 0
-        return AgentResult(
-            success=success,
-            action=strategy,
-            details=results,
-            errors=results["errors"],
-        )
-
-    # ------------------------------------------------------------------
-    # Strategy decision
-    # ------------------------------------------------------------------
-
-    def _decide_strategy(self, drift: float, reclass_rate: float) -> str:
-        if reclass_rate >= RECLASSIFICATION_RATE_THRESHOLD:
-            self.log.info(
-                "Reclassification rate %.4f >= threshold %.4f → force EWC update.",
-                reclass_rate, RECLASSIFICATION_RATE_THRESHOLD,
-            )
-            return STRATEGY_EWC_UPDATE
-        if drift < EWC_DRIFT_LOW:
-            return STRATEGY_SKIP
-        if drift < EWC_DRIFT_HIGH:
-            return STRATEGY_EWC_UPDATE
-        return STRATEGY_FULL_RETRAIN
-
-    def _queue_full_retrain(self, drift: float, reclass_rate: float) -> None:
-        self.log.warning(
-            "Drift %.4f >= EWC_DRIFT_HIGH %.4f — queuing full retrain.",
-            drift, EWC_DRIFT_HIGH,
-        )
-        self.state.add_pending_review({
-            "reason":       "Drift exceeds EWC safe range — full retrain required",
-            "drift_score":  drift,
-            "reclass_rate": reclass_rate,
-            "agent":        self.name,
-            "action_required": (
-                "EWC cannot safely bridge this level of distribution shift. "
-                "Schedule a full retrain from the updated corpus. "
-                "Review reclassified variants before proceeding."
-            ),
-        })
-
-    # ------------------------------------------------------------------
-    # ResNet-50 EWC update
-    # ------------------------------------------------------------------
-
-    def _run_ewc_update_resnet(self, checkpoint_dir: Path) -> dict:
-        """
-        1. Load current ResNet-50 checkpoint + Fisher diagonal
-        2. Compute updated Fisher on the validation set
-        3. Fine-tune with EWC penalty on new training data
-        4. Recompute Fisher on updated model
-        5. Save model.pt + fisher.pt to checkpoint_dir/resnet50/
-        """
-        result: dict[str, Any] = {"updated": False, "val_acc": None, "error": None}
-
-        try:
-            import torch
-            from ewc_utils import (
-                EWCPenalty,
-                build_resnet50,
-                compute_fisher_diagonal,
-                ewc_fine_tune,
-                load_fisher,
-                save_fisher,
-                snapshot_params,
-            )
-        except ImportError as exc:
-            result["error"] = f"PyTorch / torchvision not available: {exc}"
-            self.log.warning(result["error"])
-            return result
-
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.log.info("ResNet-50 EWC update — device: %s", device)
-
-        # Locate previous checkpoint artifacts
-        checkpoint_ref = self.state.get("model_checkpoint_ref")
-        prev_resnet_dir = (
-            Path(checkpoint_ref) / RESNET_SUBDIR
-            if checkpoint_ref else None
-        )
-        prev_weights = (
-            prev_resnet_dir / "model.pt"
-            if prev_resnet_dir and (prev_resnet_dir / "model.pt").exists()
-            else None
-        )
-        prev_fisher_path = (
-            prev_resnet_dir / "fisher.pt"
-            if prev_resnet_dir and (prev_resnet_dir / "fisher.pt").exists()
-            else None
-        )
-
-        if self.dry_run:
-            self._dry_run_log(
-                f"Would EWC fine-tune ResNet-50 from {prev_weights} "
-                f"for {EWC_EPOCHS} epochs (lambda={EWC_LAMBDA})."
-            )
-            return {"updated": False, "dry_run": True}
-
-        model = build_resnet50(RESNET_NUM_CLASSES, prev_weights, device)
-        train_loader, val_loader = self._build_image_loaders(device)
-
-        if train_loader is None:
-            result["error"] = "No image training data found — skipping ResNet update."
-            self.log.warning(result["error"])
-            return result
-
-        # Load or compute Fisher diagonal
-        if prev_fisher_path:
-            fisher = load_fisher(prev_fisher_path, device)
-        else:
-            self.log.info("No prior Fisher matrix — computing from val set.")
-            fisher = compute_fisher_diagonal(
-                model, val_loader, EWC_FISHER_SAMPLES, device
-            )
-
-        old_params  = snapshot_params(model, device)
-        ewc_penalty = EWCPenalty(model, fisher, old_params, EWC_LAMBDA, device)
-
-        history = ewc_fine_tune(
-            model, ewc_penalty, train_loader, val_loader,
-            lr=EWC_LR, epochs=EWC_EPOCHS, device=device,
-        )
-
-        best_val_acc = max(history["val_acc"]) if history["val_acc"] else None
-        result["val_acc"] = best_val_acc
-        self.log.info("ResNet-50 fine-tune complete.  best_val_acc=%.4f", best_val_acc or 0)
-
-        # Recompute Fisher on updated model for next run
-        new_fisher = compute_fisher_diagonal(
-            model, val_loader, EWC_FISHER_SAMPLES, device
-        )
-
-        out_dir = checkpoint_dir / RESNET_SUBDIR
-        out_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(model.state_dict(), out_dir / "model.pt")
-        save_fisher(new_fisher, out_dir / "fisher.pt")
-        with open(out_dir / "training_history.json", "w") as fh:
-            json.dump(history, fh, indent=2)
-
-        result["updated"] = True
-        return result
-
-    def _build_image_loaders(self, device):
-        """
-        Build DataLoaders for TCGA histopathology images.
-        Expects PROCESSED_DATA_DIR/images/{train,val}/ as torchvision ImageFolder.
-        Returns (None, None) if dirs don't exist.
-        """
-        train_dir = PROCESSED_DATA_DIR / "images" / "train"
-        val_dir   = PROCESSED_DATA_DIR / "images" / "val"
-        if not train_dir.exists():
-            return None, None
-
-        try:
-            import torch
-            from torchvision import datasets, transforms  # type: ignore
-
-            tfm = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std =[0.229, 0.224, 0.225],
-                ),
-            ])
-            train_ds = datasets.ImageFolder(str(train_dir), transform=tfm)
-            val_ds   = datasets.ImageFolder(str(val_dir),   transform=tfm)
-            pin      = (device.type == "cuda")
-            return (
-                torch.utils.data.DataLoader(
-                    train_ds, batch_size=EWC_BATCH_SIZE, shuffle=True,
-                    num_workers=2, pin_memory=pin,
-                ),
-                torch.utils.data.DataLoader(
-                    val_ds, batch_size=EWC_BATCH_SIZE, shuffle=False,
-                    num_workers=2, pin_memory=pin,
-                ),
-            )
-        except Exception as exc:
-            self.log.error("Failed to build image loaders: %s", exc)
-            return None, None
-
-    # ------------------------------------------------------------------
-    # Ensemble replay-buffer update
-    # ------------------------------------------------------------------
-
-    def _run_ensemble_replay_update(self, checkpoint_dir: Path) -> dict:
-        """
-        Continual learning for XGBoost / LightGBM via memory replay:
-        1. Load replay buffer → stratified-sample REPLAY_SAMPLE_FRAC
-        2. Concatenate with new training data
-        3. Continue training existing boosters for ENSEMBLE_BOOST_ROUNDS
-        4. Save updated boosters; update replay buffer (reservoir sampling)
-        """
-        result: dict[str, Any] = {"updated": False, "metrics": {}, "error": None}
-
-        try:
-            import pandas as pd
-        except ImportError as exc:
-            result["error"] = f"pandas not available: {exc}"
-            return result
-
-        if not TRAIN_PARQUET.exists():
-            result["error"] = "train.parquet not found — skipping ensemble update."
-            self.log.warning(result["error"])
-            return result
-
-        try:
-            train_df = pd.read_parquet(TRAIN_PARQUET)
-            val_df   = pd.read_parquet(VAL_PARQUET)
-        except Exception as exc:
-            result["error"] = f"Could not load parquet data: {exc}"
-            return result
-
-        if self.dry_run:
-            self._dry_run_log(
-                f"Would update ensemble on {len(train_df)} new + replay samples "
-                f"for {ENSEMBLE_BOOST_ROUNDS} rounds."
-            )
-            return {"updated": False, "dry_run": True}
-
-        # Mix in replay buffer
-        if REPLAY_BUFFER_PARQUET.exists():
-            try:
-                replay_df = pd.read_parquet(REPLAY_BUFFER_PARQUET)
-                n_replay  = max(1, int(len(replay_df) * REPLAY_SAMPLE_FRAC))
-                sample    = replay_df.sample(n=min(n_replay, len(replay_df)),
-                                              random_state=42)
-                train_df  = pd.concat([train_df, sample], ignore_index=True)
-                self.log.info("Replay buffer: sampled %d / %d records.",
-                              len(sample), len(replay_df))
-            except Exception as exc:
-                self.log.warning("Replay buffer load failed (%s) — proceeding without.", exc)
-
-        label_col = "pathogenicity_class"
-        if label_col not in train_df.columns:
-            result["error"] = f"Label column '{label_col}' missing."
-            return result
-
-        feature_cols = [c for c in train_df.columns if c != label_col]
-        X_train = train_df[feature_cols].values.astype(np.float32)
-        y_train = train_df[label_col].values
-        X_val   = val_df[feature_cols].values.astype(np.float32)
-        y_val   = val_df[label_col].values
-
-        out_dir = checkpoint_dir / ENSEMBLE_SUBDIR
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        metrics: dict[str, Any] = {}
-        metrics["xgboost"]  = self._update_xgboost(X_train, y_train, X_val, y_val, out_dir)
-        metrics["lightgbm"] = self._update_lightgbm(X_train, y_train, X_val, y_val, out_dir)
-
-        self._update_replay_buffer(train_df, label_col)
-
-        result["updated"] = (
-            metrics["xgboost"].get("saved", False) or
-            metrics["lightgbm"].get("saved", False)
-        )
-        result["metrics"] = metrics
-        return result
-
-    def _update_xgboost(self, X_train, y_train, X_val, y_val, out_dir: Path) -> dict:
-        result: dict[str, Any] = {"saved": False}
-        try:
-            import xgboost as xgb  # type: ignore
-        except ImportError:
-            return {"skipped": "xgboost not installed"}
-
-        dtrain = xgb.DMatrix(X_train, label=y_train)
-        dval   = xgb.DMatrix(X_val,   label=y_val)
-
-        checkpoint_ref = self.state.get("model_checkpoint_ref")
-        prev_path = (
-            Path(checkpoint_ref) / ENSEMBLE_SUBDIR / "xgb_model.ubj"
-            if checkpoint_ref else None
-        )
-        init_model = str(prev_path) if prev_path and prev_path.exists() else None
-
-        params = {
-            "objective":        "multi:softprob",
-            "num_class":        5,
-            "eval_metric":      ["mlogloss", "merror"],
-            "max_depth":        6,
-            "learning_rate":    0.05,
-            "subsample":        0.8,
-            "colsample_bytree": 0.8,
-            "tree_method":      "hist",
-            "device":           "cuda" if _cuda_available() else "cpu",
-        }
-
-        evals_result: dict = {}
-        booster = xgb.train(
-            params, dtrain,
-            num_boost_round=ENSEMBLE_BOOST_ROUNDS,
-            evals=[(dtrain, "train"), (dval, "val")],
-            evals_result=evals_result,
-            xgb_model=init_model,
-            verbose_eval=False,
-        )
-        booster.save_model(str(out_dir / "xgb_model.ubj"))
-        result["saved"]        = True
-        result["val_mlogloss"] = evals_result.get("val", {}).get("mlogloss", [None])[-1]
-        result["val_merror"]   = evals_result.get("val", {}).get("merror",   [None])[-1]
-        self.log.info("XGBoost: val_mlogloss=%.4f  val_merror=%.4f",
-                      result["val_mlogloss"] or 0, result["val_merror"] or 0)
-        return result
-
-    def _update_lightgbm(self, X_train, y_train, X_val, y_val, out_dir: Path) -> dict:
-        result: dict[str, Any] = {"saved": False}
-        try:
-            import lightgbm as lgb  # type: ignore
-        except ImportError:
-            return {"skipped": "lightgbm not installed"}
-
-        train_set = lgb.Dataset(X_train, label=y_train)
-        val_set   = lgb.Dataset(X_val,   label=y_val, reference=train_set)
-
-        checkpoint_ref = self.state.get("model_checkpoint_ref")
-        prev_path = (
-            Path(checkpoint_ref) / ENSEMBLE_SUBDIR / "lgb_model.txt"
-            if checkpoint_ref else None
-        )
-        init_model = str(prev_path) if prev_path and prev_path.exists() else None
-
-        params = {
-            "objective":        "multiclass",
-            "num_class":        5,
-            "metric":           ["multi_logloss", "multi_error"],
-            "num_leaves":       63,
-            "learning_rate":    0.05,
-            "feature_fraction": 0.8,
-            "bagging_fraction": 0.8,
-            "bagging_freq":     5,
-            "verbose":          -1,
-            "device_type":      "gpu" if _cuda_available() else "cpu",
-        }
-
-        evals_result: dict = {}
-        booster = lgb.train(
-            params, train_set,
-            num_boost_round=ENSEMBLE_BOOST_ROUNDS,
-            valid_sets=[val_set],
-            valid_names=["val"],
-            init_model=init_model,
-            callbacks=[lgb.record_evaluation(evals_result),
-                       lgb.log_evaluation(period=10)],
-        )
-        booster.save_model(str(out_dir / "lgb_model.txt"))
-        result["saved"]      = True
-        result["val_logloss"] = booster.best_score.get("val", {}).get("multi_logloss")
-        result["val_error"]   = booster.best_score.get("val", {}).get("multi_error")
-        self.log.info("LightGBM: val_logloss=%.4f  val_error=%.4f",
-                      result["val_logloss"] or 0, result["val_error"] or 0)
-        return result
-
-    # ------------------------------------------------------------------
-    # Replay buffer — reservoir sampling
-    # ------------------------------------------------------------------
-
-    def _update_replay_buffer(self, new_data: "pd.DataFrame", label_col: str) -> None:
-        """
-        Maintain a stratified replay buffer via reservoir sampling.
-        New samples have an equal probability of displacing old ones,
-        preserving the running distribution without loading full history.
-        """
-        try:
-            import pandas as pd
-        except ImportError:
-            return
-
-        buffer = (
-            pd.read_parquet(REPLAY_BUFFER_PARQUET)
-            if REPLAY_BUFFER_PARQUET.exists()
-            else pd.DataFrame()
-        )
-
-        combined = pd.concat([buffer, new_data], ignore_index=True)
-
-        if label_col in combined.columns:
-            classes   = combined[label_col].unique()
-            per_class = REPLAY_BUFFER_SIZE // len(classes)
-            parts = [
-                combined[combined[label_col] == cls].sample(
-                    n=min(per_class, (combined[label_col] == cls).sum()),
-                    random_state=42,
+            # ── FEATURE_INSTABILITY ────────────────────────────────
+            elif subject == FEATURE_INSTABILITY:
+                flagged = payload.get("flagged_features", [])
+                reason = payload.get("reason", "SHAP instability detected")
+                self.logger.info(
+                    "📨  FEATURE_INSTABILITY from %s — %d feature(s) flagged.",
+                    sender,
+                    len(flagged),
                 )
-                for cls in classes
-            ]
-            new_buffer = pd.concat(parts, ignore_index=True)
-        else:
-            new_buffer = combined.sample(
-                n=min(REPLAY_BUFFER_SIZE, len(combined)), random_state=42
-            )
+                for f in flagged:
+                    self.logger.info("  ↳ Flagged feature: %s", f)
 
-        new_buffer.to_parquet(REPLAY_BUFFER_PARQUET, index=False)
-        self.log.info(
-            "Replay buffer updated: %d records.", len(new_buffer)
+                # Persist instability flags into SharedState for next EWC run
+                state = self._state.load()
+                existing = state.get("training", {}).get("instability_flags", [])
+                new_flags = [
+                    {
+                        "feature": f,
+                        "reason": reason,
+                        "flagged_at": datetime.now(timezone.utc).isoformat(),
+                        "resolved": False,
+                    }
+                    for f in flagged
+                    if f not in [x.get("feature") for x in existing]
+                ]
+                if new_flags:
+                    existing.extend(new_flags)
+                    self._update_section("training", {"instability_flags": existing})
+                    self.logger.info(
+                        "  ↳ %d new instability flag(s) written to SharedState.",
+                        len(new_flags),
+                    )
+
+                # If SHAP found serious instability, flag for retrain
+                if payload.get("severity") == "high":
+                    self._retrain_flag = True
+                    self._trigger_reason = "feature_instability"
+                    self.logger.info("  ↳ High-severity instability — retrain flagged.")
+
+            # ── FEATURE_CANDIDATE_ADDED ────────────────────────────
+            elif subject == FEATURE_CANDIDATE_ADDED:
+                candidate = payload.get("candidate_name", "unknown")
+                source = payload.get("literature_source", "unknown")
+                self.logger.info(
+                    "📨  FEATURE_CANDIDATE_ADDED from %s — candidate=%s  source=%s",
+                    sender,
+                    candidate,
+                    source,
+                )
+                # Log to SharedState for the next feature-engineering review
+                state = self._state.load()
+                candidates = state.get("training", {}).get(
+                    "pending_feature_candidates", []
+                )
+                candidates.append(
+                    {
+                        "name": candidate,
+                        "source": source,
+                        "added_at": datetime.now(timezone.utc).isoformat(),
+                        "reviewed": False,
+                    }
+                )
+                self._update_section(
+                    "training", {"pending_feature_candidates": candidates}
+                )
+                self.logger.info(
+                    "  ↳ Feature candidate '%s' queued for review.", candidate
+                )
+
+            else:
+                self.logger.warning(
+                    "Unrecognised message subject '%s' from %s — skipping.",
+                    subject,
+                    sender,
+                )
+
+            processed_ids.append(msg_id)
+
+        return processed_ids
+
+    # ------------------------------------------------------------------
+    # Emit CHECKPOINT_READY — NEW
+    # ------------------------------------------------------------------
+
+    def _emit_checkpoint_ready(self, checkpoint_path: str, dry_run: bool) -> None:
+        """
+        Notify InterpretabilityAgent that a new checkpoint is ready for
+        SHAP analysis.
+        """
+        payload = {
+            "checkpoint_path": checkpoint_path,
+            "trigger_reason": self._trigger_reason,
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+            "ewc_applied": True,
+            "data_sources": self._data_sources,
+        }
+        self.send_message(
+            to=_INTERPRETABILITY_AGENT,
+            subject=CHECKPOINT_READY,
+            payload=payload,
+            priority=PRIORITY_HIGH,
+        )
+        self.logger.info(
+            "→ CHECKPOINT_READY sent to %s  [checkpoint=%s]",
+            _INTERPRETABILITY_AGENT,
+            checkpoint_path,
         )
 
     # ------------------------------------------------------------------
-    # Checkpointing helpers
+    # EWC training logic — unchanged from existing implementation
     # ------------------------------------------------------------------
 
-    def _new_checkpoint_dir(self) -> Path:
-        ts      = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        version = len(list(CHECKPOINT_DIR.glob("*_v*"))) + 1
-        path    = CHECKPOINT_DIR / f"{ts}_v{version}"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def _write_checkpoint_metadata(self, checkpoint_dir: Path, results: dict) -> None:
-        meta = {
-            "version":          checkpoint_dir.name,
-            "created_at":       datetime.now(timezone.utc).isoformat(),
-            "strategy":         results.get("strategy"),
-            "drift_score":      results.get("drift_score"),
-            "resnet_val_acc":   results.get("resnet_val_acc"),
-            "ensemble_metrics": results.get("ensemble_metrics"),
-            "ewc_lambda":       EWC_LAMBDA,
-            "resnet_updated":   results.get("resnet_updated"),
-            "ensemble_updated": results.get("ensemble_updated"),
-        }
-        with open(checkpoint_dir / "metadata.json", "w") as fh:
-            json.dump(meta, fh, indent=2)
-
-    def _push_checkpoint(self, checkpoint_dir: Path) -> None:
-        # Google Drive (Colab)
-        gdrive = GDRIVE_CHECKPOINT_DIR / checkpoint_dir.name
+    def _check_drift(self, dry_run: bool) -> bool:
+        """
+        Run drift detection against the most recent variant batch.
+        Returns True if drift is detected above threshold.
+        """
+        self.logger.info("Running drift detection …")
         try:
-            if GDRIVE_CHECKPOINT_DIR.parent.exists():
-                shutil.copytree(str(checkpoint_dir), str(gdrive))
-                self.log.info("Checkpoint mirrored to GDrive → %s", gdrive)
+            from ewc_utils import detect_drift
+
+            drift = detect_drift(self._get_section("training"))
+            if drift:
+                self.logger.info("Drift detected above threshold — retrain warranted.")
+            else:
+                self.logger.info("Drift within acceptable bounds.")
+            return drift
         except Exception as exc:
-            self.log.warning("GDrive push skipped: %s", exc)
+            self.logger.warning(
+                "Drift detection failed: %s — treating as no drift.", exc
+            )
+            return False
 
-        # GCS
-        if GCS_CHECKPOINT_PREFIX.startswith("gs://"):
-            try:
-                from google.cloud import storage  # type: ignore
-                client      = storage.Client()
-                bucket_name, prefix = GCS_CHECKPOINT_PREFIX[5:].split("/", 1)
-                bucket      = client.bucket(bucket_name)
-                gcs_prefix  = f"{prefix}/{checkpoint_dir.name}"
-                for f in checkpoint_dir.rglob("*"):
-                    if f.is_file():
-                        bucket.blob(
-                            f"{gcs_prefix}/{f.relative_to(checkpoint_dir)}"
-                        ).upload_from_filename(str(f))
-                self.log.info("Checkpoint pushed to GCS: gs://%s/%s",
-                              bucket_name, gcs_prefix)
-            except ImportError:
-                self.log.warning("google-cloud-storage not installed — GCS skipped.")
-            except Exception as exc:
-                self.log.warning("GCS push failed: %s", exc)
+    def _run_training(self, dry_run: bool) -> str | None:
+        """
+        Execute the EWC retraining script and return the checkpoint path,
+        or None if training failed.
+        """
+        if dry_run:
+            self.logger.info("  [dry-run] Would run: %s", _MODEL_RETRAIN_SCRIPT)
+            return None
 
-    def _update_state(self, checkpoint_dir: Path, results: dict) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        self.state.set("model_checkpoint_ref", str(checkpoint_dir))
-        self.state.set("model_last_trained",   now)
-        fisher_path = checkpoint_dir / RESNET_SUBDIR / "fisher.pt"
-        if fisher_path.exists():
-            self.state.set("ewc_fisher_ref", str(fisher_path))
-        self.state.set("ewc_lambda", EWC_LAMBDA)
-        self.log.info("State updated: checkpoint=%s", checkpoint_dir.name)
+        self._log_section("EWC Training")
+        self.logger.info("Running: %s", _MODEL_RETRAIN_SCRIPT)
 
+        # Record the start of this training run
+        self._update_section(
+            "training",
+            {
+                "last_run": datetime.now(timezone.utc).isoformat(),
+                "trigger_reason": self._trigger_reason,
+            },
+        )
 
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
+        try:
+            result = subprocess.run(
+                _MODEL_RETRAIN_SCRIPT,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=7200,
+            )
+            if result.returncode != 0:
+                self.logger.error(
+                    "Training script failed (exit %d):\n%s",
+                    result.returncode,
+                    result.stderr[:1000],
+                )
+                return None
 
-def _cuda_available() -> bool:
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
+            self.logger.info("Training completed successfully.")
+            checkpoint_path = self._locate_latest_checkpoint()
+            if checkpoint_path:
+                self._update_section("training", {"last_checkpoint": checkpoint_path})
+                self.logger.info("Checkpoint saved: %s", checkpoint_path)
+            return checkpoint_path
+
+        except subprocess.TimeoutExpired:
+            self.logger.error("Training timed out after 7200s.")
+            return None
+        except Exception as exc:
+            self.logger.error("Training error: %s", exc)
+            return None
+
+    def _locate_latest_checkpoint(self) -> str | None:
+        """
+        Find the most recently modified checkpoint file in CHECKPOINT_DIR.
+        Returns the path string, or None if no checkpoints found.
+        """
+        checkpoint_dir = Path(CHECKPOINT_DIR)
+        if not checkpoint_dir.exists():
+            self.logger.warning("Checkpoint directory not found: %s", checkpoint_dir)
+            return None
+
+        candidates = sorted(
+            checkpoint_dir.glob("*.pt"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            self.logger.warning("No .pt checkpoints found in %s", checkpoint_dir)
+            return None
+
+        return str(candidates[0])

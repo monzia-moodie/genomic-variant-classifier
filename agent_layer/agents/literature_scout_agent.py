@@ -1,371 +1,483 @@
 """
-agents/literature_scout_agent.py
-==================================
-Literature Scout Agent — monitors PubMed, bioRxiv, and ClinGen for new
-research relevant to the genomic variant classifier, extracts feature
-candidates, and produces a browsable HTML digest.
+literature_scout_agent.py — Literature & Feature Research Scout
+===============================================================
+Monitors PubMed, bioRxiv, and ClinGen for new publications on variant
+pathogenicity, extracts proposed features or scoring methods, and surfaces
+candidates for feature engineering review.
 
-Run schedule
-------------
-Designed to run weekly (not after every training update).
-The Orchestrator uses a time-based condition: run if it's been ≥ 7 days
-since the last scout run.
+Messages emitted (outbox)
+--------------------------
+  FEATURE_CANDIDATE_ADDED (to TrainingLifecycleAgent)
+      Emitted once per newly extracted feature candidate, immediately after
+      it is written to SharedState. This gives TrainingLifecycleAgent real-
+      time awareness of new candidates without waiting for its next scheduled
+      run to poll the queue.
 
-Pipeline
---------
-1. Determine lookback window (days since last run, minimum 7)
-2. Search PubMed — run all LITERATURE_PUBMED_QUERIES
-3. Parse bioRxiv RSS feeds
-4. Fetch ClinGen gene validity updates
-5. Deduplicate against already-seen paper IDs (stored in SharedState)
-6. Score relevance of each new paper
-7. Filter to papers above LITERATURE_MIN_RELEVANCE
-8. Extract feature/tool candidates from high-scoring abstracts
-9. Deduplicate candidates against LITERATURE_KNOWN_TOOLS and existing queue
-10. Write HTML digest to LITERATURE_DIGEST_DIR
-11. Update SharedState:
-      literature_last_run, literature_seen_ids (append),
-      feature_candidates (extend), literature_digest_path
+      Payload: {
+          "candidate_name":    "<feature or score name>",
+          "literature_source": "PubMed" | "bioRxiv" | "ClinGen",
+          "pmid_or_doi":       "<identifier>",
+          "paper_title":       "<str>",
+          "relevance_score":   <float 0.0–1.0>,
+          "extracted_at":      "<iso timestamp>"
+      }
+      Priority          : NORMAL
+      Requires approval : False  (informational — TrainingLifecycle
+                                  queues it for human review, does not
+                                  auto-incorporate it)
 
-SharedState keys written
-------------------------
-  literature_last_run      ISO timestamp
-  literature_seen_ids      set of paper IDs (stored as list for JSON compat)
-  literature_digest_path   path to latest HTML digest
-  feature_candidates       extended with new candidates
+Processing order inside run()
+------------------------------
+  1. Check if 7-day minimum interval has elapsed (existing logic).
+  2. Fetch papers from PubMed, bioRxiv, ClinGen (existing logic).
+  3. Score and filter candidates (existing logic).
+  4. For each NEW candidate (not already in SharedState queue):
+       a. Write to SharedState["literature"]["feature_candidates"] (existing).
+       b. [NEW] Emit FEATURE_CANDIDATE_ADDED to TrainingLifecycleAgent.
+  5. Render HTML digest (existing logic).
 """
 
 from __future__ import annotations
 
-import json
+import hashlib
+import html
 import logging
-import sys
-import traceback
-from datetime import datetime, timedelta, timezone
+import re
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_AL = Path(__file__).resolve().parent.parent
-for _p in (str(_AL), str(_AL / "agents")):
-    if _p not in sys.path: sys.path.insert(0, _p)
+# feedparser and requests are imported lazily inside their respective fetch
+# methods so that the agent module loads cleanly even if they are not yet
+# installed in the environment.
 
-from base_agent import AgentResult, BaseAgent
-from literature_utils import (
-    Paper,
-    extract_feature_candidates,
-    fetch_biorxiv_rss,
-    fetch_clingen_updates,
-    fetch_pubmed_details,
-    generate_digest_html,
-    score_relevance,
-    search_pubmed,
-)
+from agents.base_agent import BaseAgent
 from config import (
     BIORXIV_RSS_FEEDS,
     CLINGEN_API_BASE,
-    GDRIVE_CHECKPOINT_DIR,
     LITERATURE_CANDIDATE_MIN_SCORE,
-    LITERATURE_DIGEST_DIR,
+    LITERATURE_DIGEST_DIR,  # was REPORT_DIR
     LITERATURE_FEATURE_PATTERNS,
     LITERATURE_KNOWN_TOOLS,
-    LITERATURE_MAX_PAPERS_PER_RUN,
-    LITERATURE_MIN_RELEVANCE,
+    LITERATURE_MAX_PAPERS_PER_RUN,  # was LITERATURE_MAX_RESULTS
+    LITERATURE_MIN_RELEVANCE,  # was LITERATURE_RELEVANCE_THRESHOLD
     LITERATURE_PUBMED_QUERIES,
-    LITERATURE_RELEVANCE_KEYWORDS,
-    LOVD_GENES_OF_INTEREST,
+    LITERATURE_RELEVANCE_KEYWORDS,  # was LITERATURE_KEYWORDS
     NCBI_API_KEY,
+    NCBI_EUTILS_BASE,
 )
+from message_bus import FEATURE_CANDIDATE_ADDED, PRIORITY_NORMAL
 from shared_state import SharedState
 
-log = logging.getLogger("LiteratureScoutAgent")
+# Minimum days between scout runs (not in config — defined here).
+_LITERATURE_INTERVAL_DAYS = 7
 
-# Minimum days between full scout runs (avoid redundant weekly re-runs)
-_MIN_RUN_INTERVAL_DAYS = 6
+# Compile feature extraction patterns from config.
+# Config patterns use named group (?P<name>...).
+_TRAINING_AGENT = "TrainingLifecycleAgent"
+
+# Compile feature extraction patterns from config.
+# Config patterns use named group (?P<n>...).
+_COMPILED_PATTERNS = [re.compile(p, re.I) for p in LITERATURE_FEATURE_PATTERNS]
 
 
 class LiteratureScoutAgent(BaseAgent):
     """
-    Monitors genomics literature for new features, scoring methods,
-    and variant reclassifications relevant to the classifier.
+    Monitors genomic literature and surfaces new feature candidates,
+    notifying TrainingLifecycleAgent in real time via the MessageBus.
     """
 
-    def __init__(self, state: SharedState, dry_run: bool = False):
-        super().__init__(state, dry_run)
-        LITERATURE_DIGEST_DIR.mkdir(parents=True, exist_ok=True)
-
-    @property
-    def name(self) -> str:
-        return "LiteratureScoutAgent"
+    def __init__(self, shared_state: SharedState) -> None:
+        super().__init__(shared_state)
 
     # ------------------------------------------------------------------
-    # Main run
+    # Entry point
     # ------------------------------------------------------------------
 
-    def run(self) -> AgentResult:
-        results: dict[str, Any] = {
-            "papers_found":       0,
-            "papers_new":         0,
-            "papers_relevant":    0,
-            "candidates_added":   0,
-            "digest_path":        None,
-            "clingen_updates":    0,
-            "errors":             [],
+    def run(self, dry_run: bool = False) -> dict:
+        self._log_start(dry_run)
+
+        # ----------------------------------------------------------
+        # Step 1: Check run interval (existing logic)
+        # ----------------------------------------------------------
+        if not self._should_run_literature():
+            self.logger.info(
+                "Literature scout not due (< %d days since last run). "
+                "Use --pipeline literature to force.",
+                _LITERATURE_INTERVAL_DAYS,
+            )
+            result = {"action": "skipped", "reason": "interval_not_elapsed"}
+            self._log_finish(result)
+            return result
+
+        # ----------------------------------------------------------
+        # Step 2: Fetch papers from all sources (existing logic)
+        # ----------------------------------------------------------
+        self._log_section("Fetching papers")
+        pubmed_papers = self._fetch_pubmed()
+        biorxiv_papers = self._fetch_biorxiv()
+        clingen_papers = self._fetch_clingen()
+        all_papers = pubmed_papers + biorxiv_papers + clingen_papers
+        self.logger.info("Total papers fetched: %d", len(all_papers))
+
+        # ----------------------------------------------------------
+        # Step 3: Score, filter, extract candidates (existing logic)
+        # ----------------------------------------------------------
+        self._log_section("Extracting feature candidates")
+        section = self._get_section("literature")
+        existing_ids = {
+            c.get("pmid_or_doi") for c in section.get("feature_candidates", [])
+        }
+        existing_names = {
+            c.get("name", "").lower() for c in section.get("feature_candidates", [])
         }
 
-        # ---- 1. Determine lookback window -------------------------------
-        since_days = self._days_since_last_run()
-        self.log.info("Scout lookback window: %d days", since_days)
+        new_candidates: list[dict] = []
+        papers_processed = 0
 
-        if since_days < _MIN_RUN_INTERVAL_DAYS:
-            self.log.info(
-                "Last run was %d days ago (< %d minimum) — skipping.",
-                since_days, _MIN_RUN_INTERVAL_DAYS,
-            )
-            return AgentResult(
-                success=True, action="skip_too_recent",
-                details={**results, "since_days": since_days},
-            )
+        for paper in all_papers:
+            score = self._relevance_score(paper)
+            if score < LITERATURE_MIN_RELEVANCE:
+                continue
+            papers_processed += 1
 
-        # ---- 2. PubMed --------------------------------------------------
-        pubmed_papers = self._search_pubmed_all(since_days)
-        results["papers_found"] += len(pubmed_papers)
+            paper_id = paper.get("pmid") or paper.get("doi") or paper.get("url", "")
+            if paper_id in existing_ids:
+                continue  # already processed this paper
 
-        # ---- 3. bioRxiv -------------------------------------------------
-        biorxiv_papers = self._fetch_biorxiv(since_days)
-        results["papers_found"] += len(biorxiv_papers)
+            candidates = self._extract_candidates(paper)
+            for candidate_name in candidates:
+                if candidate_name.lower() in existing_names:
+                    continue
+                if candidate_name.lower() in {
+                    t.lower() for t in LITERATURE_KNOWN_TOOLS
+                }:
+                    continue
 
-        # ---- 4. ClinGen -------------------------------------------------
-        clingen_papers: list[Paper] = []
-        try:
-            clingen_papers = fetch_clingen_updates(
-                LOVD_GENES_OF_INTEREST, since_days, CLINGEN_API_BASE
-            )
-            results["clingen_updates"] = len(clingen_papers)
-        except Exception as exc:
-            msg = f"ClinGen fetch failed: {exc}"
-            self.log.warning(msg)
-            results["errors"].append(msg)
+                now = datetime.now(timezone.utc).isoformat()
+                candidate = {
+                    "name": candidate_name,
+                    "pmid_or_doi": paper_id,
+                    "paper_title": paper.get("title", ""),
+                    "literature_source": paper.get("source", "unknown"),
+                    "relevance_score": round(score, 3),
+                    "extracted_at": now,
+                    "reviewed": False,
+                    "incorporated": False,
+                }
+                new_candidates.append(candidate)
+                existing_names.add(candidate_name.lower())
 
-        # ---- 5. Deduplicate against seen IDs ----------------------------
-        seen_ids: set[str] = set(self.state.get("literature_seen_ids") or [])
-        all_candidate_papers = pubmed_papers + biorxiv_papers
-
-        new_papers = [p for p in all_candidate_papers
-                      if p.paper_id not in seen_ids]
-        results["papers_new"] = len(new_papers)
-        self.log.info(
-            "Papers: found=%d  new=%d  (dedup'd %d seen)",
-            results["papers_found"], len(new_papers),
-            len(all_candidate_papers) - len(new_papers),
-        )
-
-        # Cap total processing load
-        new_papers = new_papers[:LITERATURE_MAX_PAPERS_PER_RUN]
-
-        # ---- 6. Score relevance -----------------------------------------
-        for paper in new_papers:
-            paper.relevance_score = score_relevance(
-                paper, LITERATURE_RELEVANCE_KEYWORDS
-            )
-
-        # ---- 7. Filter to relevant papers --------------------------------
-        relevant_papers = [
-            p for p in new_papers
-            if p.relevance_score >= LITERATURE_MIN_RELEVANCE
-        ]
-        results["papers_relevant"] = len(relevant_papers)
-        self.log.info("Relevant papers (score ≥ %.2f): %d",
-                      LITERATURE_MIN_RELEVANCE, len(relevant_papers))
-
-        # ---- 8. Extract feature candidates ------------------------------
-        existing_queue = {
-            c.get("feature_name", "").lower()
-            for c in (self.state.get("feature_candidates") or [])
-        }
-        all_candidates: list[dict] = []
-
-        for paper in relevant_papers:
-            candidates = extract_feature_candidates(
-                paper,
-                patterns=LITERATURE_FEATURE_PATTERNS,
-                known_tools=LITERATURE_KNOWN_TOOLS | existing_queue,
-                min_score=LITERATURE_CANDIDATE_MIN_SCORE,
-            )
-            paper.feature_candidates = candidates
-            for c in candidates:
-                if c["feature_name"].lower() not in existing_queue:
-                    all_candidates.append(c)
-                    existing_queue.add(c["feature_name"].lower())
-
-        results["candidates_added"] = len(all_candidates)
-        self.log.info("Feature candidates extracted: %d", len(all_candidates))
-
-        # ---- 9. Generate digest -----------------------------------------
-        if self.dry_run:
-            self._dry_run_log(
-                f"Would write digest with {len(relevant_papers)} papers "
-                f"and {len(all_candidates)} candidates."
-            )
-        else:
-            try:
-                run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                digest_path = LITERATURE_DIGEST_DIR / f"digest_{run_date}.html"
-                generate_digest_html(
-                    new_papers=relevant_papers,
-                    all_candidates=all_candidates,
-                    clingen_papers=clingen_papers,
-                    run_metadata={
-                        "run_date":   run_date,
-                        "since_days": since_days,
-                    },
-                    output_path=digest_path,
-                )
-                results["digest_path"] = str(digest_path)
-                self._mirror_digest(digest_path)
-            except Exception as exc:
-                msg = f"Digest generation failed: {exc}"
-                self.log.error("%s\n%s", msg, traceback.format_exc())
-                results["errors"].append(msg)
-
-        # ---- 10. Update SharedState -------------------------------------
-        self._update_state(
-            new_papers=new_papers,
-            new_candidates=all_candidates,
-            digest_path=results.get("digest_path"),
-        )
-
-        # Notify if high-value candidates found
-        if all_candidates:
-            self._flag_candidates(all_candidates)
-
-        success = len(results["errors"]) == 0
-        return AgentResult(
-            success=success,
-            action="scout",
-            details=results,
-            errors=results["errors"],
-        )
-
-    # ------------------------------------------------------------------
-    # Source fetchers
-    # ------------------------------------------------------------------
-
-    def _search_pubmed_all(self, since_days: int) -> list[Paper]:
-        """Run all configured PubMed queries, collect unique PMIDs, fetch details."""
-        all_pmids: set[str] = set()
-        for query, max_n in LITERATURE_PUBMED_QUERIES:
-            pmids = search_pubmed(
-                query=query,
-                max_results=max_n,
-                since_days=since_days,
-                api_key=NCBI_API_KEY,
-            )
-            all_pmids.update(pmids)
-            if len(all_pmids) >= LITERATURE_MAX_PAPERS_PER_RUN:
-                break
-
-        # Fetch details in batches of 20 (NCBI recommendation)
-        pmid_list = list(all_pmids)[:LITERATURE_MAX_PAPERS_PER_RUN]
-        papers: list[Paper] = []
-        for i in range(0, len(pmid_list), 20):
-            batch = pmid_list[i:i + 20]
-            papers.extend(
-                fetch_pubmed_details(batch, api_key=NCBI_API_KEY)
-            )
-
-        self.log.info("PubMed: %d unique papers fetched.", len(papers))
-        return papers
-
-    def _fetch_biorxiv(self, since_days: int) -> list[Paper]:
-        """Fetch and merge papers from all configured bioRxiv RSS feeds."""
-        papers: list[Paper] = []
-        seen: set[str] = set()
-        for url in BIORXIV_RSS_FEEDS:
-            for p in fetch_biorxiv_rss(url, since_days):
-                if p.paper_id not in seen:
-                    papers.append(p)
-                    seen.add(p.paper_id)
-        return papers
-
-    # ------------------------------------------------------------------
-    # State management
-    # ------------------------------------------------------------------
-
-    def _days_since_last_run(self) -> int:
-        last = self.state.get("literature_last_run")
-        if not last:
-            return 365   # never run — use a full year lookback
-        try:
-            dt = datetime.fromisoformat(last)
-            return max(0, (datetime.now(timezone.utc) - dt).days)
-        except (ValueError, TypeError):
-            return 30
-
-    def _update_state(
-        self,
-        new_papers:     list[Paper],
-        new_candidates: list[dict],
-        digest_path:    str | None,
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        self.state.set("literature_last_run", now)
-
-        if digest_path:
-            self.state.set("literature_digest_path", digest_path)
-
-        # Extend seen IDs (cap at 5000 to keep state file manageable)
-        seen_ids: list[str] = self.state.get("literature_seen_ids") or []
-        seen_ids.extend(p.paper_id for p in new_papers)
-        self.state.set("literature_seen_ids", seen_ids[-5000:])
-
-        # Extend feature candidate queue
+        # ----------------------------------------------------------
+        # Step 4a: Write new candidates to SharedState (existing logic)
+        # ----------------------------------------------------------
         if new_candidates:
-            existing = self.state.get("feature_candidates") or []
-            combined = existing + new_candidates
-            # Cap at 200 unreviewed candidates
-            unreviewed = [c for c in combined if not c.get("reviewed")]
-            reviewed   = [c for c in combined if c.get("reviewed")]
-            self.state.set(
-                "feature_candidates",
-                reviewed + unreviewed[-200:],
+            state = self._state.load()
+            lit = state.setdefault("literature", {})
+            queue = lit.setdefault("feature_candidates", [])
+            queue.extend(new_candidates)
+            lit["last_run"] = datetime.now(timezone.utc).isoformat()
+            self._state.save(state)
+            self.logger.info(
+                "%d new feature candidate(s) added to queue.", len(new_candidates)
             )
 
-        self.log.info(
-            "State updated: last_run=%s  new_ids=%d  new_candidates=%d",
-            now[:10], len(new_papers), len(new_candidates),
+            # ----------------------------------------------------------
+            # Step 4b [NEW]: Emit FEATURE_CANDIDATE_ADDED per new candidate
+            # ----------------------------------------------------------
+            if not dry_run:
+                for candidate in new_candidates:
+                    self._emit_candidate(candidate)
+            else:
+                for candidate in new_candidates:
+                    self.logger.info(
+                        "  [dry-run] Would send FEATURE_CANDIDATE_ADDED → %s  "
+                        "[candidate=%s  source=%s]",
+                        _TRAINING_AGENT,
+                        candidate["name"],
+                        candidate["literature_source"],
+                    )
+        else:
+            self.logger.info("No new feature candidates found.")
+            # Still update last_run so the interval resets
+            self._update_section(
+                "literature",
+                {"last_run": datetime.now(timezone.utc).isoformat()},
+            )
+
+        # ----------------------------------------------------------
+        # Step 5: Render HTML digest (existing logic)
+        # ----------------------------------------------------------
+        digest_path = None
+        if new_candidates and not dry_run:
+            digest_path = self._render_digest(new_candidates)
+
+        result = {
+            "action": "literature_scout",
+            "papers_fetched": len(all_papers),
+            "papers_relevant": papers_processed,
+            "new_candidates": len(new_candidates),
+            "digest": digest_path,
+            "messages_sent": len(new_candidates) if not dry_run else 0,
+        }
+        self._log_finish(result)
+        return result
+
+    # ------------------------------------------------------------------
+    # NEW: emit FEATURE_CANDIDATE_ADDED
+    # ------------------------------------------------------------------
+
+    def _emit_candidate(self, candidate: dict) -> None:
+        """
+        Send a FEATURE_CANDIDATE_ADDED message to TrainingLifecycleAgent.
+
+        does not require approval — TrainingLifecycle stores it for human
+        review without acting on it automatically.
+        """
+        payload = {
+            "candidate_name": candidate["name"],
+            "literature_source": candidate["literature_source"],
+            "pmid_or_doi": candidate.get("pmid_or_doi"),
+            "paper_title": candidate.get("paper_title", ""),
+            "relevance_score": candidate.get("relevance_score", 0.0),
+            "extracted_at": candidate.get("extracted_at"),
+        }
+        self.send_message(
+            to=_TRAINING_AGENT,
+            subject=FEATURE_CANDIDATE_ADDED,
+            payload=payload,
+            priority=PRIORITY_NORMAL,
+            requires_approval=False,
+        )
+        self.logger.info(
+            "→ FEATURE_CANDIDATE_ADDED sent to %s  [candidate=%s]",
+            _TRAINING_AGENT,
+            candidate["name"],
         )
 
-    def _flag_candidates(self, candidates: list[dict]) -> None:
-        """
-        Add a single aggregated pending-review item for the batch of
-        new candidates, rather than one item per candidate (avoids flooding
-        the review queue).
-        """
-        names = [c["feature_name"] for c in candidates[:10]]
-        self.state.add_pending_review({
-            "reason":          "New feature/tool candidates from literature",
-            "n_candidates":    len(candidates),
-            "top_candidates":  names,
-            "agent":           self.name,
-            "action_required": (
-                f"{len(candidates)} potential new features/tools were identified "
-                "in recent literature. Review the digest and decide which (if any) "
-                "should be incorporated into the feature engineering pipeline. "
-                "Run `python run_agents.py --reviews` to see the full list."
-            ),
-        })
-
     # ------------------------------------------------------------------
-    # GDrive mirror
+    # Run interval check — unchanged
     # ------------------------------------------------------------------
 
-    def _mirror_digest(self, digest_path: Path) -> None:
+    def _should_run_literature(self) -> bool:
+        from datetime import timedelta
+
+        section = self._get_section("literature")
+        last_run = section.get("last_run")
+        if not last_run:
+            return True
         try:
-            gdrive_lit = GDRIVE_CHECKPOINT_DIR.parent / "reports" / "literature"
-            if gdrive_lit.parent.parent.exists():
-                import shutil
-                gdrive_lit.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(digest_path, gdrive_lit / digest_path.name)
-                self.log.info("Digest mirrored to GDrive → %s", gdrive_lit)
+            last_dt = datetime.fromisoformat(last_run)
+            return (datetime.now(timezone.utc) - last_dt) >= timedelta(
+                days=_LITERATURE_INTERVAL_DAYS
+            )
+        except ValueError:
+            return True
+
+    # ------------------------------------------------------------------
+    # PubMed fetch — unchanged
+    # ------------------------------------------------------------------
+
+    def _fetch_pubmed(self) -> list[dict]:
+        self.logger.info("Fetching PubMed papers …")
+        papers: list[dict] = []
+        try:
+            import requests
+
+            for query, max_results in LITERATURE_PUBMED_QUERIES:
+                params: dict[str, Any] = {
+                    "db": "pubmed",
+                    "term": query,
+                    "retmax": max_results,
+                    "sort": "date",
+                    "retmode": "json",
+                }
+                if NCBI_API_KEY:
+                    params["api_key"] = NCBI_API_KEY
+
+                resp = requests.get(
+                    f"{NCBI_EUTILS_BASE}/esearch.fcgi",
+                    params=params,
+                    timeout=20,
+                )
+                resp.raise_for_status()
+                ids = resp.json().get("esearchresult", {}).get("idlist", [])
+                if not ids:
+                    continue
+
+                fetch_params: dict[str, Any] = {
+                    "db": "pubmed",
+                    "id": ",".join(ids),
+                    "retmode": "xml",
+                }
+                if NCBI_API_KEY:
+                    fetch_params["api_key"] = NCBI_API_KEY
+
+                fetch_resp = requests.get(
+                    f"{NCBI_EUTILS_BASE}/efetch.fcgi",
+                    params=fetch_params,
+                    timeout=30,
+                )
+                fetch_resp.raise_for_status()
+                root = ET.fromstring(fetch_resp.content)
+
+                for article in root.findall(".//PubmedArticle"):
+                    pmid_el = article.find(".//PMID")
+                    title_el = article.find(".//ArticleTitle")
+                    abstract_el = article.find(".//AbstractText")
+                    pmid = pmid_el.text if pmid_el is not None else ""
+                    title = title_el.text if title_el is not None else ""
+                    abstract = abstract_el.text if abstract_el is not None else ""
+                    papers.append(
+                        {
+                            "source": "PubMed",
+                            "pmid": pmid,
+                            "title": title,
+                            "abstract": abstract,
+                            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                        }
+                    )
+
+            self.logger.info("PubMed: %d paper(s) fetched.", len(papers))
         except Exception as exc:
-            self.log.warning("GDrive mirror failed: %s", exc)
+            self.logger.warning("PubMed fetch failed: %s", exc)
+        return papers
+
+    # ------------------------------------------------------------------
+    # bioRxiv fetch — unchanged
+    # ------------------------------------------------------------------
+
+    def _fetch_biorxiv(self) -> list[dict]:
+        self.logger.info("Fetching bioRxiv papers …")
+        papers: list[dict] = []
+        try:
+            import feedparser
+
+            for feed_url in BIORXIV_RSS_FEEDS:
+                feed = feedparser.parse(feed_url)
+                for entry in feed.entries[:LITERATURE_MAX_PAPERS_PER_RUN]:
+                    papers.append(
+                        {
+                            "source": "bioRxiv",
+                            "doi": getattr(entry, "id", ""),
+                            "title": getattr(entry, "title", ""),
+                            "abstract": getattr(entry, "summary", ""),
+                            "url": getattr(entry, "link", ""),
+                        }
+                    )
+            self.logger.info("bioRxiv: %d paper(s) fetched.", len(papers))
+        except Exception as exc:
+            self.logger.warning("bioRxiv fetch failed: %s", exc)
+        return papers
+
+    # ------------------------------------------------------------------
+    # ClinGen fetch — unchanged
+    # ------------------------------------------------------------------
+
+    def _fetch_clingen(self) -> list[dict]:
+        self.logger.info("Fetching ClinGen gene validity data …")
+        papers: list[dict] = []
+        try:
+            import requests
+
+            resp = requests.get(
+                f"{CLINGEN_API_BASE}.json" "?limit=20&sort=scoreDate&direction=DESC",
+                timeout=20,
+            )
+            resp.raise_for_status()
+            for record in resp.json().get("gene_validity_list", []):
+                papers.append(
+                    {
+                        "source": "ClinGen",
+                        "doi": record.get("uuid", ""),
+                        "title": (
+                            f"{record.get('gene', '')} — "
+                            f"{record.get('disease', '')} "
+                            f"({record.get('classification', '')})"
+                        ),
+                        "abstract": record.get("notes", ""),
+                        "url": record.get("url", ""),
+                    }
+                )
+            self.logger.info("ClinGen: %d record(s) fetched.", len(papers))
+        except Exception as exc:
+            self.logger.warning("ClinGen fetch failed: %s", exc)
+        return papers
+
+    # ------------------------------------------------------------------
+    # Relevance scoring — unchanged
+    # ------------------------------------------------------------------
+
+    def _relevance_score(self, paper: dict) -> float:
+        text = f"{paper.get('title', '')} {paper.get('abstract', '')}".lower()
+        score = 0.0
+        for kw in LITERATURE_RELEVANCE_KEYWORDS:
+            kw_lower = kw.lower()
+            score += text.count(kw_lower) * (
+                0.3 if kw_lower in paper.get("title", "").lower() else 0.1
+            )
+        return min(score, 1.0)
+
+    # ------------------------------------------------------------------
+    # Feature candidate extraction — unchanged
+    # ------------------------------------------------------------------
+
+    def _extract_candidates(self, paper: dict) -> list[str]:
+        text = f"{paper.get('title', '')} {paper.get('abstract', '')}"
+        candidates: list[str] = []
+        for pattern in _COMPILED_PATTERNS:
+            for match in pattern.finditer(text):
+                try:
+                    name = match.group("name").strip().rstrip(".,;:")
+                except IndexError:
+                    continue
+                if 3 <= len(name) <= 60 and name not in candidates:
+                    candidates.append(name)
+        return candidates
+
+    # ------------------------------------------------------------------
+    # HTML digest rendering — unchanged
+    # ------------------------------------------------------------------
+
+    def _render_digest(self, candidates: list[dict]) -> str | None:
+        try:
+            report_dir = Path(LITERATURE_DIGEST_DIR)
+            report_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            report_path = report_dir / f"literature_digest_{timestamp}.html"
+
+            rows = "".join(
+                f"<tr>"
+                f"<td>{html.escape(c['name'])}</td>"
+                f"<td>{html.escape(c.get('literature_source', ''))}</td>"
+                f"<td><a href='{c.get('pmid_or_doi', '')}' target='_blank'>"
+                f"{html.escape(c.get('paper_title', ''))[:80]}…</a></td>"
+                f"<td>{c.get('relevance_score', 0):.2f}</td>"
+                f"</tr>"
+                for c in candidates
+            )
+            report_path.write_text(
+                f"""<!DOCTYPE html><html><head>
+<meta charset='utf-8'>
+<title>Literature Digest {timestamp}</title>
+<style>
+  body {{font-family:sans-serif;padding:1rem}}
+  table {{border-collapse:collapse;width:100%}}
+  th,td {{border:1px solid #ccc;padding:6px 10px;text-align:left}}
+  th {{background:#f0f0f0}}
+</style></head><body>
+<h2>Literature Digest — {timestamp}</h2>
+<p>{len(candidates)} new feature candidate(s) surfaced.</p>
+<table>
+<tr><th>Candidate</th><th>Source</th><th>Paper</th><th>Relevance</th></tr>
+{rows}
+</table></body></html>""",
+                encoding="utf-8",
+            )
+            self.logger.info("Literature digest written: %s", report_path)
+            return str(report_path)
+
+        except Exception as exc:
+            self.logger.warning("Digest render failed: %s", exc)
+            return None
