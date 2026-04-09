@@ -1,0 +1,3 @@
+# Ignore all data files — directory tracked by this file
+*
+!.gitignore
