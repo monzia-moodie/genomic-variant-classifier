@@ -573,29 +573,33 @@ class CNN1DClassifier(BaseEstimator, ClassifierMixin):
         self.classes_ = np.array([0, 1])
 
     def _build_model(self):
-        import tensorflow as tf
-        from tensorflow.keras import layers, models as km
+        import torch
+        import torch.nn as nn
 
-        tf.random.set_seed(self.random_state)
-        inp = layers.Input(shape=(self.window, 4))
-        x = layers.Conv1D(
-            self.filters, self.kernel_size, activation="relu", padding="same"
-        )(inp)
-        x = layers.MaxPooling1D(2)(x)
-        x = layers.Conv1D(
-            self.filters * 2, self.kernel_size, activation="relu", padding="same"
-        )(x)
-        x = layers.GlobalMaxPooling1D()(x)
-        x = layers.Dense(128, activation="relu")(x)
-        x = layers.Dropout(self.dropout)(x)
-        out = layers.Dense(1, activation="sigmoid")(x)
-        model = km.Model(inp, out)
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(self.learning_rate),
-            loss="binary_crossentropy",
-            metrics=["AUC"],
-        )
-        return model
+        torch.manual_seed(self.random_state)
+
+        class _CNN1D(nn.Module):
+            def __init__(self, filters, kernel_size, dropout):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Conv1d(4, filters, kernel_size, padding=kernel_size // 2),
+                    nn.ReLU(),
+                    nn.MaxPool1d(2),
+                    nn.Conv1d(filters, filters * 2, kernel_size, padding=kernel_size // 2),
+                    nn.ReLU(),
+                    nn.AdaptiveMaxPool1d(1),
+                    nn.Flatten(),
+                    nn.Linear(filters * 2, 128),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(128, 1),
+                    nn.Sigmoid(),
+                )
+
+            def forward(self, x):
+                return self.net(x).squeeze(-1)
+
+        return _CNN1D(self.filters, self.kernel_size, self.dropout)
 
     def _encode_X(self, X):
         if isinstance(X, pd.Series):
@@ -604,27 +608,60 @@ class CNN1DClassifier(BaseEstimator, ClassifierMixin):
             seqs = X["fasta_seq"].fillna("A" * self.window)
         else:
             seqs = pd.Series(X).fillna("A" * self.window)
-        return np.stack([encode_sequence(s, window=self.window) for s in seqs])
+        arr = np.stack([encode_sequence(s, window=self.window) for s in seqs])
+        return arr.transpose(0, 2, 1)  # (N, 4, window) for Conv1d
 
     def fit(self, X, y):
-        import tensorflow as tf
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
 
-        self.model_ = self._build_model()
-        self.model_.fit(
-            self._encode_X(X),
-            y,
-            epochs=self.epochs,
-            batch_size=self.batch_size,
-            validation_split=0.1,
-            callbacks=[
-                tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)
-            ],
-            verbose=0,
-        )
+        torch.manual_seed(self.random_state)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        X_enc = torch.tensor(self._encode_X(X), dtype=torch.float32)
+        y_t   = torch.tensor(np.asarray(y), dtype=torch.float32)
+
+        n_val = max(1, int(0.1 * len(X_enc)))
+        idx   = torch.randperm(len(X_enc))
+        X_val, y_val = X_enc[idx[:n_val]].to(device), y_t[idx[:n_val]].to(device)
+        X_tr,  y_tr  = X_enc[idx[n_val:]].to(device), y_t[idx[n_val:]].to(device)
+
+        loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=self.batch_size, shuffle=True)
+        self.model_ = self._build_model().to(device)
+        opt = torch.optim.Adam(self.model_.parameters(), lr=self.learning_rate)
+        loss_fn = nn.BCELoss()
+
+        best_val, best_state, patience_ctr = float("inf"), None, 0
+        for _epoch in range(self.epochs):
+            self.model_.train()
+            for xb, yb in loader:
+                opt.zero_grad()
+                loss_fn(self.model_(xb), yb).backward()
+                opt.step()
+            self.model_.eval()
+            with torch.no_grad():
+                val_loss = loss_fn(self.model_(X_val), y_val).item()
+            if val_loss < best_val - 1e-4:
+                best_val = val_loss
+                best_state = {k: v.cpu().clone() for k, v in self.model_.state_dict().items()}
+                patience_ctr = 0
+            else:
+                patience_ctr += 1
+                if patience_ctr >= 5:
+                    break
+        if best_state is not None:
+            self.model_.load_state_dict(best_state)
+        self.model_.to("cpu")
         return self
 
     def predict_proba(self, X):
-        proba = self.model_.predict(self._encode_X(X), verbose=0).flatten()
+        import torch
+
+        self.model_.eval()
+        X_enc = torch.tensor(self._encode_X(X), dtype=torch.float32)
+        with torch.no_grad():
+            proba = self.model_(X_enc).numpy()
         return np.column_stack([1 - proba, proba])
 
     def predict(self, X):
@@ -655,47 +692,71 @@ class TabularNNClassifier(BaseEstimator, ClassifierMixin):
         self.classes_ = np.array([0, 1])
 
     def _build_model(self, input_dim):
-        import tensorflow as tf
-        from tensorflow.keras import layers, models as km, regularizers
+        import torch
+        import torch.nn as nn
 
-        tf.random.set_seed(self.random_state)
-        inp = layers.Input(shape=(input_dim,))
-        x = inp
+        torch.manual_seed(self.random_state)
+        layers_list = []
+        in_dim = input_dim
         for dim in self.hidden_dims:
-            x = layers.Dense(
-                dim, activation="relu", kernel_regularizer=regularizers.l2(1e-4)
-            )(x)
-            x = layers.BatchNormalization()(x)
-            x = layers.Dropout(self.dropout)(x)
-        out = layers.Dense(1, activation="sigmoid")(x)
-        model = km.Model(inp, out)
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(self.learning_rate),
-            loss="binary_crossentropy",
-            metrics=["AUC"],
-        )
-        return model
+            layers_list += [nn.Linear(in_dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(self.dropout)]
+            in_dim = dim
+        layers_list += [nn.Linear(in_dim, 1), nn.Sigmoid()]
+        return nn.Sequential(*layers_list)
 
     def fit(self, X, y):
-        import tensorflow as tf
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+
+        torch.manual_seed(self.random_state)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         X_scaled = self.scaler_.fit_transform(X)
-        self.model_ = self._build_model(X_scaled.shape[1])
-        self.model_.fit(
-            X_scaled,
-            y,
-            epochs=self.epochs,
-            batch_size=self.batch_size,
-            validation_split=0.1,
-            callbacks=[
-                tf.keras.callbacks.EarlyStopping(patience=8, restore_best_weights=True)
-            ],
-            verbose=0,
-        )
+        X_t = torch.tensor(X_scaled, dtype=torch.float32)
+        y_t = torch.tensor(np.asarray(y), dtype=torch.float32)
+
+        n_val = max(1, int(0.1 * len(X_t)))
+        idx   = torch.randperm(len(X_t))
+        X_val, y_val = X_t[idx[:n_val]].to(device), y_t[idx[:n_val]].to(device)
+        X_tr,  y_tr  = X_t[idx[n_val:]].to(device), y_t[idx[n_val:]].to(device)
+
+        loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=self.batch_size, shuffle=True)
+        self.model_ = self._build_model(X_scaled.shape[1]).to(device)
+        opt = torch.optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        loss_fn = nn.BCELoss()
+
+        best_val, best_state, patience_ctr = float("inf"), None, 0
+        for _epoch in range(self.epochs):
+            self.model_.train()
+            for xb, yb in loader:
+                opt.zero_grad()
+                loss_fn(self.model_(xb).squeeze(-1), yb).backward()
+                opt.step()
+            self.model_.eval()
+            with torch.no_grad():
+                val_loss = loss_fn(self.model_(X_val).squeeze(-1), y_val).item()
+            if val_loss < best_val - 1e-4:
+                best_val = val_loss
+                best_state = {k: v.cpu().clone() for k, v in self.model_.state_dict().items()}
+                patience_ctr = 0
+            else:
+                patience_ctr += 1
+                if patience_ctr >= 8:
+                    break
+        if best_state is not None:
+            self.model_.load_state_dict(best_state)
+        self.model_.to("cpu")
         return self
 
     def predict_proba(self, X):
-        proba = self.model_.predict(self.scaler_.transform(X), verbose=0).flatten()
+        import torch
+
+        self.model_.eval()
+        X_scaled = self.scaler_.transform(X)
+        X_t = torch.tensor(X_scaled, dtype=torch.float32)
+        with torch.no_grad():
+            proba = self.model_(X_t).squeeze(-1).numpy()
         return np.column_stack([1 - proba, proba])
 
     def predict(self, X):
