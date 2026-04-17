@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
  
 SPLICEAI_HIGH_CONFIDENCE = 0.5
 SPLICEAI_MODERATE        = 0.2
-DEFAULT_VCF_PATH = Path("data/external/spliceai_scores.masked.snv.hg38.vcf.gz")
+DEFAULT_SPLICEAI_PATH = Path("data/external/spliceai/spliceai_index.parquet")
  
  
 class SpliceAIConnector(BaseConnector):
@@ -84,9 +84,13 @@ class SpliceAIConnector(BaseConnector):
         config: Optional[FetchConfig] = None,
     ) -> None:
         super().__init__(config)
-        self.vcf_path: Optional[Path] = (
-            Path(vcf_path) if vcf_path is not None else None
-        )
+        # Default to the parquet index when no path is provided — parallels
+        # AlphaMissenseConnector's convention. If the default path does not
+        # exist on disk, _get_lookup() logs a WARNING and returns zeros.
+        if vcf_path is not None:
+            self.vcf_path: Optional[Path] = Path(vcf_path)
+        else:
+            self.vcf_path = DEFAULT_SPLICEAI_PATH
  
     def fetch(self, variant_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         if variant_df.empty:

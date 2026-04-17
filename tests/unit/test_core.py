@@ -2163,6 +2163,25 @@ class TestPhyloPConnector:
 # Tests: pipeline wiring in real_data_prep.py
 # ---------------------------------------------------------------------------
 class TestAnnotationPipeline:
+    @pytest.fixture(autouse=True)
+    def _isolate_spliceai(self, monkeypatch, tmp_path):
+        """Short-circuit SpliceAI disk I/O for every test in this class.
+
+        Without this fixture, tests that call pipeline._annotate_scores()
+        instantiate SpliceAIConnector() with the default parquet path,
+        triggering a 60+ second parquet read and rebuilding a 430 MB
+        cache on disk. The fixture points DEFAULT_SPLICEAI_PATH at a
+        nonexistent tmp file AND nulls out BaseConnector._load_cache,
+        so the stub-zero code path is exercised regardless of on-disk
+        state. Individual tests remain free to override these.
+        """
+        from src.data import spliceai as _spliceai_mod
+        from src.data.database_connectors import BaseConnector
+        monkeypatch.setattr(
+            _spliceai_mod, "DEFAULT_SPLICEAI_PATH", tmp_path / "nonexistent.parquet"
+        )
+        monkeypatch.setattr(BaseConnector, "_load_cache", lambda self, key: None)
+
     """Tests for DataPrepPipeline._annotate_scores() and AnnotationConfig."""
 
     @pytest.fixture
