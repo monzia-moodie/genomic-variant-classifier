@@ -23,3 +23,4 @@ __all__ = [
     "OperatingPoint",
     "compare_models",
 ]
+from src.evaluation.prediction_artifacts import RunArtifactWriter

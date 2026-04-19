@@ -138,47 +138,103 @@ CONSEQUENCE_SEVERITY: dict[str, int] = {
 
 TABULAR_FEATURES = [
     # Allele frequency (6)
-    "af_raw", "af_log10", "af_is_absent", "af_is_ultra_rare", "af_is_rare", "af_is_common",
+    "af_raw",
+    "af_log10",
+    "af_is_absent",
+    "af_is_ultra_rare",
+    "af_is_rare",
+    "af_is_common",
     # Variant type (7)
-    "ref_len", "alt_len", "len_diff", "is_snv", "is_insertion", "is_deletion", "is_indel",
+    "ref_len",
+    "alt_len",
+    "len_diff",
+    "is_snv",
+    "is_insertion",
+    "is_deletion",
+    "is_indel",
     # Consequence (6)
-    "consequence_severity", "is_loss_of_function", "is_missense", "is_synonymous", "is_splice", "in_coding",
+    "consequence_severity",
+    "is_loss_of_function",
+    "is_missense",
+    "is_synonymous",
+    "is_splice",
+    "in_coding",
     # Functional scores (9)
-    "cadd_phred", "sift_score", "polyphen2_score", "revel_score", "phylop_score",
-    "gerp_score", "alphamissense_score", "splice_ai_score", "eve_score",
+    "cadd_phred",
+    "sift_score",
+    "polyphen2_score",
+    "revel_score",
+    "phylop_score",
+    "gerp_score",
+    "alphamissense_score",
+    "splice_ai_score",
+    "eve_score",
     # Binary flags + meta-score (5)
-    "cadd_high", "sift_deleterious", "polyphen_probably_damaging", "revel_pathogenic", "n_tools_pathogenic",
+    "cadd_high",
+    "sift_deleterious",
+    "polyphen_probably_damaging",
+    "revel_pathogenic",
+    "n_tools_pathogenic",
     # Gene-level (4)
-    "gene_constraint_oe", "gene_is_constrained", "n_pathogenic_in_gene", "gene_has_known_disease",
+    "gene_constraint_oe",
+    "gene_is_constrained",
+    "n_pathogenic_in_gene",
+    "gene_has_known_disease",
     # Protein features (2)
-    "has_uniprot_annotation", "n_known_pathogenic_protein_variants",
+    "has_uniprot_annotation",
+    "n_known_pathogenic_protein_variants",
     # GTEx (6)
-    "gtex_max_tpm", "gtex_n_tissues_expressed", "gtex_tissue_specificity",
-    "gtex_is_eqtl", "gtex_min_eqtl_pval", "gtex_max_abs_effect",
+    "gtex_max_tpm",
+    "gtex_n_tissues_expressed",
+    "gtex_tissue_specificity",
+    "gtex_is_eqtl",
+    "gtex_min_eqtl_pval",
+    "gtex_max_abs_effect",
     # Variant coding context (2)
-    "codon_position", "dbsnp_af",
+    "codon_position",
+    "dbsnp_af",
     # Gene-disease annotation (3)
-    "omim_n_diseases", "omim_is_autosomal_dominant", "clingen_validity_score",
+    "omim_n_diseases",
+    "omim_is_autosomal_dominant",
+    "clingen_validity_score",
     # HGMD (2)
-    "hgmd_is_disease_mutation", "hgmd_n_reports",
+    "hgmd_is_disease_mutation",
+    "hgmd_n_reports",
     # LOVD (1)
     "lovd_variant_class",
     # Chromosome context (3)
-    "is_autosome", "is_sex_chrom", "is_mitochondrial",
+    "is_autosome",
+    "is_sex_chrom",
+    "is_mitochondrial",
     # GNN-derived (1)
     "gnn_score",
     # RNA splice-context (4)
-    "maxentscan_score", "dist_to_splice_site", "exon_number", "is_canonical_splice",
+    "maxentscan_score",
+    "dist_to_splice_site",
+    "exon_number",
+    "is_canonical_splice",
     # Protein structure (4)
-    "alphafold_plddt", "solvent_accessibility", "secondary_structure_context", "dist_to_active_site",
+    "alphafold_plddt",
+    "solvent_accessibility",
+    "secondary_structure_context",
+    "dist_to_active_site",
     # 1KGP population AF (5)
-    "af_1kg_afr", "af_1kg_eur", "af_1kg_eas", "af_1kg_sas", "af_1kg_amr",
+    "af_1kg_afr",
+    "af_1kg_eur",
+    "af_1kg_eas",
+    "af_1kg_sas",
+    "af_1kg_amr",
     # FinnGen (3)
-    "finngen_af_fin", "finngen_af_nfsee", "finngen_enrichment",
+    "finngen_af_fin",
+    "finngen_af_nfsee",
+    "finngen_enrichment",
     # ESM-2 (1)
     "esm2_delta_norm",
     # gnomAD v4.1 constraint (4)
-    "pli_score", "loeuf", "syn_z", "mis_z",
+    "pli_score",
+    "loeuf",
+    "syn_z",
+    "mis_z",
 ]
 
 PHASE_2_FEATURES: list[str] = []  # All Phase 2 features now active; Phase 3 adds GWAS
@@ -585,7 +641,9 @@ class CNN1DClassifier(BaseEstimator, ClassifierMixin):
                     nn.Conv1d(4, filters, kernel_size, padding=kernel_size // 2),
                     nn.ReLU(),
                     nn.MaxPool1d(2),
-                    nn.Conv1d(filters, filters * 2, kernel_size, padding=kernel_size // 2),
+                    nn.Conv1d(
+                        filters, filters * 2, kernel_size, padding=kernel_size // 2
+                    ),
                     nn.ReLU(),
                     nn.AdaptiveMaxPool1d(1),
                     nn.Flatten(),
@@ -620,14 +678,16 @@ class CNN1DClassifier(BaseEstimator, ClassifierMixin):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         X_enc = torch.tensor(self._encode_X(X), dtype=torch.float32)
-        y_t   = torch.tensor(np.asarray(y), dtype=torch.float32)
+        y_t = torch.tensor(np.asarray(y), dtype=torch.float32)
 
         n_val = max(1, int(0.1 * len(X_enc)))
-        idx   = torch.randperm(len(X_enc))
+        idx = torch.randperm(len(X_enc))
         X_val, y_val = X_enc[idx[:n_val]].to(device), y_t[idx[:n_val]].to(device)
-        X_tr,  y_tr  = X_enc[idx[n_val:]].to(device), y_t[idx[n_val:]].to(device)
+        X_tr, y_tr = X_enc[idx[n_val:]].to(device), y_t[idx[n_val:]].to(device)
 
-        loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=self.batch_size, shuffle=True)
+        loader = DataLoader(
+            TensorDataset(X_tr, y_tr), batch_size=self.batch_size, shuffle=True
+        )
         self.model_ = self._build_model().to(device)
         opt = torch.optim.Adam(self.model_.parameters(), lr=self.learning_rate)
         loss_fn = nn.BCELoss()
@@ -644,7 +704,9 @@ class CNN1DClassifier(BaseEstimator, ClassifierMixin):
                 val_loss = loss_fn(self.model_(X_val), y_val).item()
             if val_loss < best_val - 1e-4:
                 best_val = val_loss
-                best_state = {k: v.cpu().clone() for k, v in self.model_.state_dict().items()}
+                best_state = {
+                    k: v.cpu().clone() for k, v in self.model_.state_dict().items()
+                }
                 patience_ctr = 0
             else:
                 patience_ctr += 1
@@ -699,7 +761,12 @@ class TabularNNClassifier(BaseEstimator, ClassifierMixin):
         layers_list = []
         in_dim = input_dim
         for dim in self.hidden_dims:
-            layers_list += [nn.Linear(in_dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(self.dropout)]
+            layers_list += [
+                nn.Linear(in_dim, dim),
+                nn.BatchNorm1d(dim),
+                nn.ReLU(),
+                nn.Dropout(self.dropout),
+            ]
             in_dim = dim
         layers_list += [nn.Linear(in_dim, 1), nn.Sigmoid()]
         return nn.Sequential(*layers_list)
@@ -717,13 +784,17 @@ class TabularNNClassifier(BaseEstimator, ClassifierMixin):
         y_t = torch.tensor(np.asarray(y), dtype=torch.float32)
 
         n_val = max(1, int(0.1 * len(X_t)))
-        idx   = torch.randperm(len(X_t))
+        idx = torch.randperm(len(X_t))
         X_val, y_val = X_t[idx[:n_val]].to(device), y_t[idx[:n_val]].to(device)
-        X_tr,  y_tr  = X_t[idx[n_val:]].to(device), y_t[idx[n_val:]].to(device)
+        X_tr, y_tr = X_t[idx[n_val:]].to(device), y_t[idx[n_val:]].to(device)
 
-        loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=self.batch_size, shuffle=True)
+        loader = DataLoader(
+            TensorDataset(X_tr, y_tr), batch_size=self.batch_size, shuffle=True
+        )
         self.model_ = self._build_model(X_scaled.shape[1]).to(device)
-        opt = torch.optim.Adam(self.model_.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        opt = torch.optim.Adam(
+            self.model_.parameters(), lr=self.learning_rate, weight_decay=1e-4
+        )
         loss_fn = nn.BCELoss()
 
         best_val, best_state, patience_ctr = float("inf"), None, 0
@@ -738,7 +809,9 @@ class TabularNNClassifier(BaseEstimator, ClassifierMixin):
                 val_loss = loss_fn(self.model_(X_val).squeeze(-1), y_val).item()
             if val_loss < best_val - 1e-4:
                 best_val = val_loss
-                best_state = {k: v.cpu().clone() for k, v in self.model_.state_dict().items()}
+                best_state = {
+                    k: v.cpu().clone() for k, v in self.model_.state_dict().items()
+                }
                 patience_ctr = 0
             else:
                 patience_ctr += 1
@@ -1073,6 +1146,17 @@ class VariantEnsemble:
         ]
         oof_preds = oof_preds[:, valid_cols]
 
+        # Expose OOF matrix for Rule-5 artefacts (Run 9+). Downstream
+        # writers (scripts/run9_ablations.py) read these attributes.
+        self.oof_predictions_ = oof_preds.copy()
+        self.oof_model_names_ = [
+            n for n in self.base_estimators if n in self.trained_models_
+        ]
+
+        logger.info(
+            "Training meta-learner on %d base-model OOF columns ...", len(valid_cols)
+        )
+        self.meta_learner.fit(oof_preds, y_arr)
         logger.info(
             "Training meta-learner on %d base-model OOF columns ...", len(valid_cols)
         )
