@@ -279,6 +279,19 @@ def main() -> int:
                             split_name,
                             float(X_split["gnn_score"].mean()),
                         )
+
+                # Patch 6a — re-persist split parquets with real GNN scores so
+                # the ablation harness (scripts/run9_ablations.py) reads the
+                # correct gnn_score when loading splits from disk. Without
+                # this, the on-disk parquets retain the default 0.0 from
+                # DataPrepPipeline._engineer_features.
+                _splits_dir = outdir / "splits"
+                if _splits_dir.exists():
+                    X_train.to_parquet(_splits_dir / "X_train.parquet", index=False)
+                    X_val.to_parquet(_splits_dir / "X_val.parquet", index=False)
+                    X_test.to_parquet(_splits_dir / "X_test.parquet", index=False)
+                    logger.info("GNN-updated splits re-persisted to %s/", _splits_dir)
+
                 logger.info(
                     "GNN training complete. Best val AUC: %.4f",
                     max(h["val_auc"] for h in gnn_history),
