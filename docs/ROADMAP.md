@@ -141,8 +141,10 @@ Local path: G:\My Drive\genomic-variant-data\external\pgc_gwas_summary\
 
 ### Do Not Implement Until
 
-- [ ] Run 6 (GCP) training is complete with KAN removed and
+- [x] Run 6 (GCP) training is complete with KAN removed and
       `gnomad_constraint_path` wired
+      (Runs 6-8 completed without KAN; KAN reinstated for Run 9 — see
+      2026-04-20 session. Commits b1c1150, 8f9eb60, 128331f.)
 - [ ] Phase 3 Polars bottleneck evaluation is scheduled
 - [ ] Feature count assertions audited and documented
 
@@ -156,7 +158,10 @@ Local path: G:\My Drive\genomic-variant-data\external\pgc_gwas_summary\
 
 ### Activated in Run 6
 - gnomAD v4.1 gene constraint: `pLI`, `LOEUF`, `syn_z`, `mis_z` (wired via `--gnomad-constraint`)
-- KAN unconditionally removed (C++ OOM at scale — not catchable)
+- KAN removed from Runs 6-8 (C++ OOM at scale was uncatchable without
+  the 100K subsample gate from commit 2389ee2). Reinstated for Run 9
+  after the subsample gate + Vast.ai GPU access made it tractable.
+  See 2026-04-20 session; commits b1c1150, 8f9eb60, 128331f.
 - AlphaMissense active (5.2GB TSV)
 - Ensemble resume logic added to `run_phase2_eval.py`
 
@@ -181,15 +186,30 @@ Local path: G:\My Drive\genomic-variant-data\external\pgc_gwas_summary\
 ### LiteratureScoutAgent Implementation
 Deferred from Phase 3. When implemented, configure the following watch targets:
 
-**pykan memory fix (KAN re-enablement trigger)**
-- Watch: https://github.com/KindXiaoming/pykan releases
-- Trigger condition: release notes mention memory optimization, large-dataset
-  support, or OOM fixes
-- Action on trigger: test locally with 150K stratified subsample before
-  enabling on GCP; remove unconditional `pop("kan", None)` from
-  `run_phase2_eval.py` if test passes
-- Fallback path (no pykan fix): train KAN on stratified 50K subset only,
-  contributing OOF predictions to meta-learner on that subset
+**pykan memory fix (KAN re-enablement trigger) — RESOLVED 2026-04-20**
+
+Historical context preserved; no longer active:
+
+- Original plan: watch https://github.com/KindXiaoming/pykan releases
+  for memory optimisation or OOM fixes, then remove unconditional
+  `pop("kan", None)` from `run_phase2_eval.py`.
+- What actually happened: the OOM was fixed in-tree by commit 2389ee2
+  (2026-04-04) via a 100K-sample stratified subsample gate in
+  `KANClassifier._fit_pykan`, which caps peak RAM at ~0.3 GB (from
+  17.9 GB) regardless of pykan upstream behaviour. The
+  `pop("kan", None)` remained hardcoded for Runs 6-8 anyway as
+  belt-and-braces caution.
+- Triggering condition changed: the combination of (a) the 2389ee2
+  subsample gate already shipped and (b) Vast.ai GPU access for Run 9
+  made the re-enablement checklist actionable without waiting for
+  a pykan upstream fix.
+- Resolution: 2026-04-20 session executed the re-enablement checklist.
+  See commits b1c1150, 8f9eb60, 128331f.
+
+Monitoring continues via `LiteratureScoutAgent`
+(`agent_layer/agents/version_monitor_agent.py`, committed a95c9db)
+for any future pykan improvements that might allow removing the
+100K subsample gate or increasing its threshold.
 
 **Database version monitoring (existing scope, document here for completeness)**
 - ClinVar: monthly release cadence, watch for schema changes
@@ -203,13 +223,21 @@ Add pykan version check hook alongside existing ClinVar/gnomAD freshness checks:
 - Log new versions to agent state; surface in DataFreshnessAgent report
 - This covers the gap until LiteratureScoutAgent is implemented
 
-### KAN Re-enablement Checklist (when pykan fix detected)
-- [ ] `pip install pykan --upgrade` in local venv
-- [ ] Run `python -c "import kan; m = kan.KAN([78,64,1])"` smoke test
-- [ ] Train on 150K stratified subsample locally, confirm no OOM
-- [ ] Remove `ensemble.base_estimators.pop("kan", None)` from `run_phase2_eval.py`
-- [ ] Add `--skip-kan` flag as optional override (do not hardcode removal again)
-- [ ] Re-run full training on GCP, compare AUROC delta vs Run 7 baseline
+### KAN Re-enablement Checklist — COMPLETED 2026-04-20
+- [x] `pip install pykan --upgrade` in local venv
+      (pykan 0.2.8 installed locally prior to session; verified working)
+- [x] Run `python -c "import kan; m = kan.KAN([78,64,1])"` smoke test
+      (2026-04-20 500-row synthetic probe via `VariantEnsemble.fit`
+      trained KAN successfully in ~90 seconds, pykan backend active)
+- [x] Train on 150K stratified subsample locally, confirm no OOM
+      (superseded: commit 2389ee2 already caps subsample at 100K with
+      peak RAM ~0.3 GB; 150K manual test not needed)
+- [x] Remove `ensemble.base_estimators.pop("kan", None)` from
+      `run_phase2_eval.py` (commit 8f9eb60, 2026-04-20)
+- [x] Add `--skip-kan` flag as optional override — do not hardcode
+      removal again (commit 8f9eb60, 2026-04-20)
+- [ ] Re-run full training on GCP, compare AUROC delta vs Run 7/8
+      baseline (scheduled for Run 9 on Vast.ai; user action pending)
 
 ---
 
@@ -381,9 +409,16 @@ real money spent. They must be consulted before every GCP training run.
   Must verify transformers is installed before training.
 - spliceai_index.parquet in GCS is a 29GB raw VCF dump, not a proper index.
   Omitted from Runs 6 and 7 with no AUROC impact. Needs regeneration.
-- KAN unconditionally removed. Hard C++ OOM at >100K samples, not catchable
-  by Python except. Stays removed until pykan memory fix is released.
-  LiteratureScoutAgent will monitor pykan releases.
+- KAN reinstated for Run 9 (2026-04-20). Original 17.9 GB C++ OOM at
+  >100K samples was fixed in commit 2389ee2 (2026-04-04) via a 100K-
+  sample stratified subsample gate in `KANClassifier._fit_pykan`
+  capping peak RAM at ~0.3 GB. The hardcoded `pop("kan", None)` in
+  `scripts/run_phase2_eval.py` remained through Runs 6-8 as belt-and-
+  braces caution and was removed in commit 8f9eb60. KAN is now in
+  the ensemble by default; `--skip-kan` opts out. See commits b1c1150,
+  8f9eb60, 128331f and docs/sessions/SESSION_2026-04-20.md.
+  LiteratureScoutAgent continues to monitor pykan releases for future
+  improvements to the subsample gate or threshold.
 - n_pathogenic_in_gene is #1 feature by large margin in every run.
   Must always be present in VariantRequest.
 
