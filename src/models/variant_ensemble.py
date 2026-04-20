@@ -1156,13 +1156,7 @@ class VariantEnsemble:
         logger.info(
             "Training meta-learner on %d base-model OOF columns ...", len(valid_cols)
         )
-        self.meta_learner.fit(oof_preds, y_arr)
-        logger.info(
-            "Training meta-learner on %d base-model OOF columns ...", len(valid_cols)
-        )
-        self.meta_learner.fit(
-            oof_preds, y_fit
-        )  # retained as fallback for loaded old models
+        self.meta_learner.fit(oof_preds, y_fit)
 
         logger.info("Running Nelder-Mead blend weight search ...")
         self.blend_weights_ = self._find_blend_weights(oof_preds, y_fit)
