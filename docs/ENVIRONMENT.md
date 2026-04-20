@@ -1,0 +1,7 @@
+- Local Python venv: 3.14 (known-broken for scipy/torch imports)
+- pykan: 0.2.8 (installed locally, not in requirements.txt)
+- HEAD: 0bacbe4
+- Last green CI: 2026-04-20, both doc commits
+- Splits on disk: STALE (46 cols vs 78 expected). Must regenerate before Run 9.
+- outputs/phase2_full/ state: partial from 4/19 smoke test
+- Model artifacts locally: none; live in GCS only
