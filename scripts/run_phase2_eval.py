@@ -54,16 +54,30 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="1000 Genomes Phase 3 AF parquet for gnomAD AF fallback",
     )
-    p.add_argument("--gnomad-constraint", default=None,
-                   help="Path to gnomAD v4.1 constraint TSV "
-                        "(data/external/gnomad/gnomad.v4.1.constraint_metrics.tsv)")
+    p.add_argument(
+        "--gnomad-constraint",
+        default=None,
+        help="Path to gnomAD v4.1 constraint TSV "
+        "(data/external/gnomad/gnomad.v4.1.constraint_metrics.tsv)",
+    )
     p.add_argument("--skip-nn", action="store_true")
-    p.add_argument("--string-db", default=None,
-                   help="Path to STRING DB file, or 'auto' to use config default")
+    p.add_argument(
+        "--string-db",
+        default=None,
+        help="Path to STRING DB file, or 'auto' to use config default",
+    )
     p.add_argument(
         "--skip-svm",
         action="store_true",
         help="Exclude SVM (RBF kernel is O(n²) — required at >100k samples)",
+    )
+    p.add_argument(
+        "--skip-kan",
+        action="store_true",
+        help="Exclude KAN (Kolmogorov-Arnold Network). KANClassifier already "
+        "caps memory via a 100K-sample stratified subsample gate; this "
+        "flag is provided as an optional override per ROADMAP checklist "
+        "(do not hardcode removal again).",
     )
     p.add_argument(
         "--max-train",
@@ -159,25 +173,37 @@ def main() -> int:
             seq_tr = seq_tr.iloc[idx].reset_index(drop=True)
             logger.info("Subsampled training set to %d", args.max_train)
 
-        ens_cfg = EnsembleConfig(n_folds=args.n_folds, model_dir=outdir / "models")
+        ens_cfg = EnsembleConfig(
+            n_folds=args.n_folds,
+            model_dir=outdir / "models",
+            skip_kan=args.skip_kan,
+        )
         _ensemble_path = outdir / "models" / "ensemble.joblib"
         if _ensemble_path.exists():
             import joblib as _jl
+
             logger.info("Resuming: loading existing ensemble from %s", _ensemble_path)
             ensemble = _jl.load(_ensemble_path)
         else:
             ensemble = VariantEnsemble(ens_cfg)
             if args.skip_nn:
-                ensemble.base_estimators.pop("cnn_1d",     None)
+                ensemble.base_estimators.pop("cnn_1d", None)
                 ensemble.base_estimators.pop("tabular_nn", None)
-            # KAN crashes the process at >100K samples via hard C++ OOM (not caught
-            # by Python except). Skip unconditionally until pykan memory is resolved.
-            ensemble.base_estimators.pop("kan", None)
-            logger.info("KAN skipped: process-killing OOM at scale (pykan limitation).")
+            # Historical note: KAN was unconditionally removed after Run 4's
+            # 17.9 GB C++ OOM at 1.2M samples (commit 2389ee2 on 2026-04-04).
+            # Commit 2389ee2 shipped a 100K stratified subsample gate in
+            # KANClassifier._fit_pykan that caps peak RAM at ~0.3 GB. The
+            # hardcoded pop() is therefore no longer needed; skip_kan is now
+            # an opt-in config flag. See docs/ROADMAP.md KAN Re-enablement
+            # Checklist (items 3 and 4) and the 2026-04-20 session log.
+            if args.skip_kan:
+                ensemble.base_estimators.pop("kan", None)
+                logger.info("KAN skipped: --skip-kan flag set.")
             if args.skip_svm or len(y_train) > 100_000:
                 ensemble.base_estimators.pop("svm", None)
                 logger.info(
-                    "SVM skipped: training set %d > 100K (O(n²) infeasible)", len(y_train)
+                    "SVM skipped: training set %d > 100K (O(n²) infeasible)",
+                    len(y_train),
                 )
             ensemble.fit(X_train, seq_tr, y_train)
             ensemble.save(_ensemble_path)
@@ -231,7 +257,9 @@ def main() -> int:
                 _local_links = (
                     Path(string_db_path)
                     if string_db_path and Path(string_db_path).exists()
-                    else Path("data/external/string/9606.protein.links.detailed.v12.0.txt.gz")
+                    else Path(
+                        "data/external/string/9606.protein.links.detailed.v12.0.txt.gz"
+                    )
                 )
                 _local_info = Path(
                     "data/external/string/9606.protein.info.v12.0.txt.gz"
