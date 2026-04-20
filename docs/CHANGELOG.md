@@ -440,3 +440,188 @@ story and file contents.)
 - [ ] Vast.ai instance provisioned (user action)
 - [ ] on-VM preflight passes (requires live instance)
 - [ ] training launched and final metrics captured
+
+## 2026-04-20 — KAN reinstatement, ensemble OOF fix, CI recovery
+
+Entered session investigating a CI failure (`pytest (3.11)` red since
+2026-04-19). The failing test surfaced a pre-existing bug in
+`VariantEnsemble.fit` that was simultaneously blocking Run 9's ablation
+harness at ~10 hours of CPU time. Fix verified with a 500-row synthetic
+probe in under 2 minutes. Separately, investigation of the local
+`skip_kan` behaviour during that probe revealed the `KAN unconditionally
+removed` status was 15 days out of date — the underlying OOM was
+fixed in commit 2389ee2 on 2026-04-04. With Vast.ai GPU access for
+Run 9, the remaining reason to keep KAN disabled evaporated. Three
+atomic commits shipped, all CI green.
+
+### Changed
+
+- `src/models/variant_ensemble.py` (b1c1150): removed stale duplicate
+  `self.meta_learner.fit(oof_preds, y_arr)` call at line 1159. The
+  correct call one block below used `y_fit` (length 0.85 × N, matching
+  `oof_preds`) but never ran because the stale call crashed first with
+  `ValueError: Found input variables with inconsistent numbers of
+  samples: [N*0.85, N]`. Pre-existing bug from a botched earlier
+  patch; not introduced by Patch 1 (8a7e2da). Fix is `-7/+1` lines
+  and unblocks both CI and the Run 9 ablation harness.
+
+- `scripts/run_phase2_eval.py` (8f9eb60): added `--skip-kan` argparse
+  flag, threaded through `EnsembleConfig(skip_kan=args.skip_kan)`,
+  and replaced the unconditional
+  `ensemble.base_estimators.pop("kan", None)` with a
+  `if args.skip_kan:` gate. Default behaviour change: **KAN is now in
+  the ensemble by default**. Pass `--skip-kan` to opt out. Matches
+  items 3 and 4 of the ROADMAP KAN Re-enablement Checklist. Side
+  effect: fixes the broken Dockerfile trainer CMD (see INCIDENT below).
+
+### Added
+
+- `scripts/run9_ablations.py` (128331f, 780 lines, new file): LOCO
+  ablation harness for Run 9+ with 14 ablation targets. Coexists with
+  `run_phase2_eval.py`; reads already-scaled splits from
+  `<run>/splits/` and applies feature-prefix ablations by zeroing
+  matching columns. Handles the 78-column schema confirmed on
+  2026-04-19. Includes `--skip-kan` and `--skip-mc-dropout` CLI flags,
+  a `no_kan` MODEL-level ablation, and a runtime guard that errors
+  exit 2 if `--ablation no_kan` is passed without `--skip-kan`
+  (preventing silent no-op runs).
+
+- `docs/sessions/SESSION_2026-04-20.md`: session record covering the
+  OOF bug diagnosis, KAN history reconstruction, reversal decision,
+  and three-commit shipping sequence.
+
+- `docs/incidents/INCIDENT_2026-04-20_dockerfile-trainer-skip-kan.md`:
+  documents the Dockerfile trainer CMD passing a non-existent argparse
+  flag from 2026-04-09 through 2026-04-20. Resolved as a side-effect
+  of commit 8f9eb60 adding the flag.
+
+### Discovered
+
+- **The KAN "unconditionally removed" status was 15 days out of date.**
+  Commit 2389ee2 (2026-04-04) added a 100K-sample stratified subsample
+  gate in `KANClassifier._fit_pykan` that caps peak RAM at ~0.3 GB
+  (from 17.9 GB). The hardcoded `pop("kan", None)` in
+  `run_phase2_eval.py` was added in Run 6 prep (commit a0a732d on
+  2026-04-05) as belt-and-braces caution and outlived its
+  justification. ROADMAP had a documented re-enablement checklist
+  (`docs/ROADMAP.md` lines 206-212) that was actionable-but-unactioned.
+  `LiteratureScoutAgent` (`agent_layer/agents/version_monitor_agent.py`,
+  commit a95c9db) already monitors pykan PyPI releases programmatically.
+
+- **The Dockerfile trainer CMD has been broken since 2026-04-09.**
+  Commit 671e48d added `--skip-kan` to the `scripts/run_phase2_eval.py`
+  invocation at Dockerfile line 166. Until today, `run_phase2_eval.py`
+  did not accept that flag — argparse would have errored with
+  `unrecognized arguments: --skip-kan` and exit 2. Undetected for 11
+  days because Runs 6-8 used startup scripts on GCP/Lambda/Vast.ai
+  (`scripts/gcp_run6_startup.sh` etc.), not Docker. The trainer
+  container was never invoked after 2026-04-09. Commit 8f9eb60
+  incidentally fixes this by making the flag exist.
+
+- **CI has been red since at least 2026-04-19** on the same OOF bug
+  that blocked Run 9. Test
+  `tests/unit/test_api.py::TestInferencePipeline::test_save_and_load_roundtrip`
+  was failing at 20-sample scale with the identical `[N*0.85, N]`
+  inconsistency that the Run 9 ablation harness hit at 1.2M-sample
+  scale after ~10 hours of training. Commit b1c1150 fixes both.
+
+- **Dockerfile is CPU-only multi-stage.** All three stages (builder,
+  api, trainer) use `python:3.11-slim-bookworm`. No CUDA runtime, no
+  GPU base image. GPU training happens via startup scripts on
+  Vast.ai/Lambda/GCP, not via Docker. No change needed for Run 9.
+
+### Design notes
+
+- **500-row synthetic probes are fast enough to be a pre-commit gate.**
+  Exercising the full `VariantEnsemble.fit()` code path with tree
+  models + KAN took ~90 seconds on the CPU-only laptop, compared to
+  22+ hours on the same hardware at real 1.2M-row scale (which
+  crashed before meta-learner fit regardless). Used this session to
+  verify the OOF fix before committing, then again to verify v4.1/v4.2
+  skip-flag semantics. Standard pattern going forward: any change to
+  `VariantEnsemble.fit` or `_build_estimators` gets a synthetic probe
+  before any attempt at scaled training.
+
+- **`no_kan` is a model-level ablation, not a feature-level one.**
+  KAN uses the same 78 input features as every other base estimator,
+  so there are no feature columns to zero. The harness handles this
+  by adding `no_kan` to `ABLATION_MASKS` with an empty prefix list
+  and gating execution on both `--ablation no_kan` AND `--skip-kan`.
+  Without the runtime guard, `--ablation no_kan` alone would zero
+  zero columns and train KAN anyway — a silent ~10-hour no-op on a
+  GPU instance. The guard returns exit 2 with an explanatory message.
+
+- **The KAN Re-enablement Checklist in ROADMAP.md was the right spec.**
+  Every item on the checklist mapped cleanly to one of the commits
+  shipped today. This is a data point for the value of maintaining
+  forward-looking checklists in ROADMAP.md: when a condition changes
+  (OOM fix + GPU access) that triggers the checklist, the work is
+  already scoped.
+
+### Learned
+
+- **Read the notes before enforcing the decision.** Entering the
+  session, memory note said "KAN unconditionally removed pending
+  pykan memory fix" and I began to enforce that rule. User pushed
+  back and asked me to investigate the history. The investigation
+  took ~20 minutes of grep over `docs/`, `logs/`, code files, and
+  git log and surfaced that (a) the OOM was fixed 15 days ago, (b)
+  Vast.ai GPU access changes the calculus anyway, (c) there's a
+  documented re-enablement checklist waiting to be executed. Had I
+  proceeded without the investigation, KAN would still be absent.
+  Standing rule #13 exists for exactly this class of error.
+
+- **Failing-loud beats failing-silent at every scale.** The
+  `--ablation no_kan` guard that returns exit 2 when `--skip-kan` is
+  absent is a small amount of code (six lines) that prevents a
+  ~10-hour silent no-op run on a GPU instance. Mirrors the SpliceAI
+  fail-loud fix from commit 9ba3127 and the ESM-2 stub-detection
+  test from 2026-04-17. Pattern: if a feature or model can be
+  silently absent, add a loud check that forces the absence to
+  announce itself.
+
+- **Grep before inferring.** Initial plan for this session
+  extrapolated `LiteratureScoutAgent` as a planning abstraction
+  from a one-line memory note. Grep surfaced a committed
+  `agent_layer/agents/version_monitor_agent.py` (commit a95c9db)
+  that already does exactly what was planned. Default to reading
+  the repo over reading the notes about the repo.
+
+### Commits shipped this session
+
+- `b1c1150 fix(ensemble): meta-learner fit uses y_fit to match oof_preds length`
+- `8f9eb60 feat(ensemble): add --skip-kan CLI flag, remove hardcoded KAN removal`
+- `128331f feat(run9): KAN as first-class ablation target; --skip-mc-dropout flag`
+
+All three green on CI (pytest 3.11, pytest 3.12, lockfile drift check,
+Docker build smoke test).
+
+### Deferred to post-Run-9 cleanup
+
+- **CI dependency conflict:** `requirements.txt` pins
+  `starlette==1.0.0` but `prometheus-fastapi-instrumentator==7.1.0`
+  (pinned by `requirements-api.lock` transitively) requires
+  `starlette<1.0`. Pip emits a non-fatal ERROR during CI install and
+  the installed env has the incompatible combination. Test suite
+  passes because no current test imports Prometheus
+  instrumentation, but runtime behaviour when instantiating the
+  FastAPI app is untested. Fix: upgrade
+  `prometheus-fastapi-instrumentator` to a version supporting
+  starlette ≥1.0, or pin `starlette<1.0` in `requirements.txt`.
+  File INCIDENT after Run 9 completes per user instruction.
+
+### Run 9 readiness after this session
+
+- [x] ensemble meta-learner fit bug fixed (b1c1150)
+- [x] `--skip-kan` CLI available in `run_phase2_eval.py` (8f9eb60)
+- [x] `scripts/run9_ablations.py` on disk with 14 ablation targets (128331f)
+- [x] `no_kan` ablation first-class with runtime guard
+- [x] CI green on main
+- [x] KAN Re-enablement Checklist items 207-211 complete (ROADMAP.md)
+- [ ] splits regenerated against current 78-col schema (user action)
+- [ ] Vast.ai instance provisioned (user action)
+- [ ] Python 3.12 venv locally (optional; deferred — Vast.ai handles its own Python)
+- [ ] Step C: verify Patch 6a `--string-db auto` branch triggers GNN injection
+- [ ] on-VM preflight passes (requires live instance)
+- [ ] KAN scalability pre-flight at 10K and 100K rows on GPU before full run
+- [ ] training launched and final metrics captured
