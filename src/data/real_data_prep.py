@@ -1209,6 +1209,8 @@ class DataPrepPipeline:
         y_test.to_frame("label").to_parquet(out / "y_test.parquet", index=False)
         meta_val.to_parquet(out / "meta_val.parquet", index=False)
         meta_test.to_parquet(out / "meta_test.parquet", index=False)
+        if meta_train is not None:
+            meta_train.to_parquet(out / "meta_train.parquet", index=False)
         logger.info("Splits saved to %s/", out)
 
     # -- Utilities --------------------------------------------------------
