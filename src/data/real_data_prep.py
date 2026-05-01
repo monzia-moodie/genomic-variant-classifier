@@ -275,12 +275,14 @@ class DataPrepPipeline:
 
         meta_val = df.iloc[val_idx].reset_index(drop=True)
         meta_test = df.iloc[test_idx].reset_index(drop=True)
+        meta_train = df.iloc[train_idx].reset_index(drop=True)
 
         if self.config.scale_features:
             X_train, X_test, X_val = self._scale(X_train, X_test, X_val)
 
         self._save_splits(
-            X_train, X_val, X_test, y_train, y_val, y_test, meta_val, meta_test
+            X_train, X_val, X_test, y_train, y_val, y_test, meta_val, meta_test,
+            meta_train=meta_train,
         )
         self._report_split_stats(
             y_train, y_test, y_val, groups, train_idx, test_idx, val_idx
@@ -1199,6 +1201,7 @@ class DataPrepPipeline:
         y_test: pd.Series,
         meta_val: pd.DataFrame,
         meta_test: pd.DataFrame,
+        meta_train: pd.DataFrame | None = None,
     ) -> None:
         out = self.config.output_dir
         X_train.to_parquet(out / "X_train.parquet", index=False)
@@ -1209,6 +1212,8 @@ class DataPrepPipeline:
         y_test.to_frame("label").to_parquet(out / "y_test.parquet", index=False)
         meta_val.to_parquet(out / "meta_val.parquet", index=False)
         meta_test.to_parquet(out / "meta_test.parquet", index=False)
+        if meta_train is not None:
+            meta_train.to_parquet(out / "meta_train.parquet", index=False)
         logger.info("Splits saved to %s/", out)
 
     # -- Utilities --------------------------------------------------------

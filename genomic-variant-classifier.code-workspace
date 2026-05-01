@@ -27,7 +27,8 @@
 		},
 		"[python]": {
 			"editor.defaultFormatter": "ms-python.black-formatter"
-		}
+		},
+		"hediet.vscode-drawio.resizeImages": false
 	},
 	"extensions": {
 		"recommendations": [

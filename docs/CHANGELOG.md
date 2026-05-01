@@ -625,3 +625,47 @@ Docker build smoke test).
 - [ ] on-VM preflight passes (requires live instance)
 - [ ] KAN scalability pre-flight at 10K and 100K rows on GPU before full run
 - [ ] training launched and final metrics captured
+
+
+## 2026-04-30
+
+### Attempted
+- Stage 3 splits regen (run_phase2_eval.py with [GNN-TRACE]
+  instrumentation, --skip-nn --skip-svm --skip-kan, --string-db auto,
+  --n-folds 2, output outputs/run9_ready/)
+
+### Failed
+- GNN training: KeyError 'gene_symbol' in build_pyg_dataset.
+  Caught by `except Exception` and downgraded to warning. on-disk
+  gnn_score remained 0.0 across all three splits.
+- --skip-nn flag did not skip mc_dropout/deep_ensemble (memory #17
+  confirmed). Wall-clock cost: 10h+ of the 13h total runtime.
+
+### Fixed (this session)
+- Stage 1: .venv312 bootstrapped on Python 3.12.10. requirements.txt +
+  torch 2.11.0+cpu + torch_geometric 2.7.0 installed cleanly.
+  Pandas pinned to 2.3.3 (was 3.0.1).
+- Stage 2: [GNN-TRACE] instrumentation patch landed in
+  scripts/run_phase2_eval.py (18 logger calls, 4/4 verification gates
+  green). Backup at scripts/run_phase2_eval.py.bak-gnn-trace.
+- Stage 3: data prep + ensemble training completed end-to-end.
+  Test AUROC 0.9814, val AUROC 0.9850.
+
+### Drafted (committed in next session)
+- Patch 6b (scripts/apply_patch_6b.py): persist meta_train.parquet
+  in DataPrepPipeline._save_splits, source gene_symbol from it in
+  run_phase2_eval.py for gnn_df construction.
+- 5K-row synthetic probe (scripts/probe_patch_6b.py).
+
+### Learned
+- Generic `except Exception: logger.warning` masks crashes. Either
+  narrow the except or use exc_info=True. [GNN-TRACE] insertion 9
+  uses exc_info=True and would have surfaced this immediately on
+  first run.
+- Patches that re-persist on success path must verify success
+  before persisting. Patch 6a re-persists regardless of whether
+  gnn_scorer was built.
+- Memory #19 (no local retraining) was violated this session at
+  cost of 13h. Reaffirming.
+- run9_ready splits are a valid GNN-FREE BASELINE for paper P4
+  comparison. Don't discard.

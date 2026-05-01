@@ -216,13 +216,22 @@ def main() -> int:
 
         # ── Optional GNN training (5.2) ───────────────────────────────────
         gnn_scorer = None
+        logger.info(
+            "[GNN-TRACE] entry: args.string_db=%r",
+            getattr(args, "string_db", None),
+        )
         if args.string_db:
             try:
+                logger.info("[GNN-TRACE] gate-passed: entering GNN block")
+                logger.info("[GNN-TRACE] importing src.models.gnn ...")
                 from src.models.gnn import (
                     GNNScorer,
                     StringDBGraph,
                     build_pyg_dataset,
                     train_gnn_pipeline,
+                )
+                logger.info(
+                    "[GNN-TRACE] import OK: GNNScorer/StringDBGraph/build_pyg_dataset/train_gnn_pipeline resolved"
                 )
 
                 # string_db may be a file path or a threshold integer string
@@ -238,20 +247,33 @@ def main() -> int:
                 # Use the 55 tabular feature columns as node features
                 node_feat_cols = [c for c in X_train.columns if c != "gnn_score"]
 
-                # Build a raw training DataFrame for the GNN (needs gene_symbol + label)
-                gnn_df = meta_val.iloc[:0].copy()  # schema reference
-                # Attach gene_symbol from the ClinVar training rows
-                # (meta_test has index aligned to test; we need train indices)
-                # The simplest approach: re-build from the split parquet files if present
-                split_train = outdir / "splits" / "X_train.parquet"
-                if split_train.exists():
-                    X_train_raw = pd.read_parquet(split_train)
-                    gnn_df = X_train_raw.copy()
+                # Build a raw training DataFrame for the GNN (needs gene_symbol + label).
+                # Patch 6b (2026-04-30): source gene_symbol from meta_train.parquet,
+                # which DataPrepPipeline now persists alongside the feature matrix.
+                # Previous implementation reloaded X_train.parquet (a 78-col numeric
+                # matrix with NO gene_symbol) and crashed inside build_pyg_dataset.
+                _meta_train_path = outdir / "splits" / "meta_train.parquet"
+                if _meta_train_path.exists():
+                    _meta_train = pd.read_parquet(_meta_train_path)
+                    gnn_df = X_train.copy().reset_index(drop=True)
+                    gnn_df["gene_symbol"] = (
+                        _meta_train["gene_symbol"].fillna("").reset_index(drop=True)
+                    )
                     gnn_df["acmg_label"] = y_train.values
+                    logger.info(
+                        "[GNN-TRACE] meta_train.parquet sourced gene_symbol "
+                        "(unique_genes=%d, missing=%d)",
+                        gnn_df["gene_symbol"].nunique(),
+                        int((gnn_df["gene_symbol"] == "").sum()),
+                    )
                 else:
-                    # Fallback: use X_train feature matrix (no gene_symbol → smaller GNN)
-                    gnn_df = X_train.copy()
-                    gnn_df["acmg_label"] = y_train.values
+                    logger.warning(
+                        "[GNN-TRACE] meta_train.parquet missing at %s; "
+                        "GNN training cannot proceed (no gene_symbol). "
+                        "Re-run DataPrepPipeline to regenerate splits.",
+                        _meta_train_path,
+                    )
+                    raise FileNotFoundError(_meta_train_path)
 
                 # Resolve STRING DB links file: prefer explicit --string-db path
                 _local_links = (
@@ -269,6 +291,21 @@ def main() -> int:
                     local_links_path=_local_links if _local_links.exists() else None,
                     local_info_path=_local_info if _local_info.exists() else None,
                 )
+                logger.info(
+                    "[GNN-TRACE] local_links exists=%s (%s)",
+                    _local_links.exists(), _local_links,
+                )
+                logger.info(
+                    "[GNN-TRACE] local_info  exists=%s (%s)",
+                    _local_info.exists(), _local_info,
+                )
+                logger.info(
+                    "[GNN-TRACE] gnn_df rows=%d cols=%d has_gene_symbol=%s",
+                    len(gnn_df), len(gnn_df.columns),
+                    "gene_symbol" in gnn_df.columns,
+                )
+                logger.info("[GNN-TRACE] train_gnn_pipeline begin")
+                _gnn_t0 = time.perf_counter()
 
                 gnn_model, gnn_trainer, gnn_history = train_gnn_pipeline(
                     variant_df=gnn_df,
@@ -278,6 +315,10 @@ def main() -> int:
                     epochs=100,
                     batch_size=32,
                 )
+                logger.info(
+                    "[GNN-TRACE] train_gnn_pipeline done in %.2fs",
+                    time.perf_counter() - _gnn_t0,
+                )
                 joblib.dump(gnn_model, outdir / "models" / "gnn_model.joblib")
                 _write_model_manifest(outdir / "models" / "gnn_model.joblib")
 
@@ -286,6 +327,13 @@ def main() -> int:
                 graph = builder.build()
                 full_dataset = build_pyg_dataset(gnn_df, graph, node_feat_cols)
                 gnn_scorer = GNNScorer.from_trainer(gnn_trainer, full_dataset, gnn_df)
+                logger.info(
+                    "[GNN-TRACE] gnn_scorer built (type=%s); "
+                    "graph_nodes=%d graph_edges=%d",
+                    type(gnn_scorer).__name__,
+                    int(getattr(graph, "num_nodes", -1)),
+                    int(getattr(graph, "num_edges", -1)),
+                )
                 joblib.dump(gnn_scorer, outdir / "models" / "gnn_scorer.joblib")
                 _write_model_manifest(outdir / "models" / "gnn_scorer.joblib")
 
@@ -295,6 +343,11 @@ def main() -> int:
                     ("val", meta_val, X_val),
                     ("test", meta, X_test),
                 ]:
+                    logger.info(
+                        "[GNN-TRACE] split=%s split_df.cols=%d has_gene_symbol=%s",
+                        split_name, len(split_df.columns),
+                        "gene_symbol" in split_df.columns,
+                    )
                     if "gene_symbol" in split_df.columns:
                         X_split["gnn_score"] = (
                             split_df["gene_symbol"]
@@ -306,6 +359,21 @@ def main() -> int:
                             "GNN scores injected into %s split (mean=%.3f).",
                             split_name,
                             float(X_split["gnn_score"].mean()),
+                        )
+                        _s = X_split["gnn_score"]
+                        logger.info(
+                            "[GNN-TRACE] post-injection split=%s rows=%d "
+                            "min=%.4f max=%.4f std=%.4f nonzero_frac=%.4f",
+                            split_name, len(_s),
+                            float(_s.min()), float(_s.max()),
+                            float(_s.std()), float((_s != 0).mean()),
+                        )
+                    else:
+                        logger.warning(
+                            "[GNN-TRACE] split=%s MISSING gene_symbol; "
+                            "gnn_score will remain at default. "
+                            "split_df sample columns: %s",
+                            split_name, list(split_df.columns)[:10],
                         )
 
                 # Patch 6a — re-persist split parquets with real GNN scores so
@@ -319,19 +387,43 @@ def main() -> int:
                     X_val.to_parquet(_splits_dir / "X_val.parquet", index=False)
                     X_test.to_parquet(_splits_dir / "X_test.parquet", index=False)
                     logger.info("GNN-updated splits re-persisted to %s/", _splits_dir)
+                    for _f in ("X_train.parquet", "X_val.parquet", "X_test.parquet"):
+                        _p = _splits_dir / _f
+                        logger.info(
+                            "[GNN-TRACE] wrote %s size=%d bytes",
+                            _p,
+                            _p.stat().st_size if _p.exists() else -1,
+                        )
+                else:
+                    logger.warning(
+                        "[GNN-TRACE] splits_dir does not exist (%s); "
+                        "re-persist SKIPPED",
+                        _splits_dir,
+                    )
 
                 logger.info(
                     "GNN training complete. Best val AUC: %.4f",
                     max(h["val_auc"] for h in gnn_history),
                 )
             except ImportError as exc:
+                logger.warning("[GNN-TRACE] ImportError caught: %s", exc)
                 logger.warning(
                     "GNN skipped — missing dependency: %s.  "
                     "Install with: pip install torch torch-geometric",
                     exc,
                 )
             except Exception as exc:
+                logger.warning(
+                    "[GNN-TRACE] generic Exception caught: %s: %s",
+                    type(exc).__name__, exc, exc_info=True,
+                )
                 logger.warning("GNN training failed: %s — continuing without GNN.", exc)
+        else:
+            logger.warning(
+                "[GNN-TRACE] gate-skipped: args.string_db is falsy (%r); "
+                "ENTIRE GNN BLOCK skipped",
+                getattr(args, "string_db", None),
+            )
 
         results = ensemble.evaluate(X_test, seq_te, y_test)
         val_results = ensemble.evaluate(X_val, seq_val, y_val)
