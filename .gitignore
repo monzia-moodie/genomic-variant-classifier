@@ -141,3 +141,14 @@ secrets/
 agent_layer/agent_state.json
 agent_layer/out.txt
 agent_layer/logs/
+
+# Additional virtualenvs (Python 3.12+, e.g. .venv312)
+.venv*/
+
+# Backup files from patch / refactor scripts
+*.bak
+*.bak-*
+
+# Session-scratch / diagnostic dumps
+diff_review.txt
+gnn_block_view.txt
