@@ -669,3 +669,114 @@ Docker build smoke test).
   cost of 13h. Reaffirming.
 - run9_ready splits are a valid GNN-FREE BASELINE for paper P4
   comparison. Don't discard.
+
+---
+
+## 2026-05-02 — Gene-scope expansion deferred to Run 10; LOVD silent-zero confirmed
+
+### Attempted
+- Review of request to add additional gene variants beyond the canonical
+  10 (BRCA1, BRCA2, MLH1, MSH2, MSH6, APC, NF1, TP53, PTEN, RB1) before
+  Run 9, with two LOVD admin emails attached as context.
+- Investigation of LOVD subsystem state (connector wiring, on-disk data,
+  trained feature matrix) to scope the integration work properly.
+- Three-stage diagnostic: schema check on `lovd_all_variants.parquet`,
+  value_counts on trained matrix, structural merge replicating the
+  connector's logic in isolation.
+
+### Failed
+- LOVD `lovd_variant_class` is identically `0` across all 1,197,216 rows
+  in `outputs/run9_ready/splits/X_train.parquet` despite:
+  - LOVD parquet on disk being structurally healthy (18,006 rows, 10
+    genes, joinable schema).
+  - LOVDConnector being unconditionally invoked at
+    `src/data/real_data_prep.py:738` with return value assigned.
+  - Diagnostic merge (replicating the connector's exact key construction
+    against `models/v1/clinvar_enriched.parquet`) yielding 5,553 inner-
+    join matches in isolation.
+  Root cause is at one of the runtime join boundaries inside the ETL —
+  either Cause 1 (downstream column overwrite) or Cause 2 (upstream
+  coordinate transformation by one of the 14 prior `annotate_dataframe`
+  steps). Distinguished by the integer in the log line at
+  `real_data_prep.py:740–748` (`"Score annotation 15/16 (LOVD): %d
+  variants with lovd_variant_class > 0."`); resolution deferred to R10-A.
+  Full record: `docs/incidents/INCIDENT_2026-05-02_lovd-silent-zero.md`.
+- Initial hypothesis (float→str trailing `.0` on the `pos` join key)
+  falsified by direct dtype check: `pos` is int64, conversion is clean.
+
+### Fixed
+- Nothing patched this session. All identified work moved to Run 10.
+
+### Learned
+- LOVD label-quality is functional-translated-to-clinical, not clinical.
+  Per LOVD admin's 2026-04-01 second email: clinical classification
+  field intentionally withheld from API pending ACMG v4. API exposes
+  `effect_reported`/`effect_concluded` (functional). Per ACMG/AMP 2015
+  framework, functional evidence (PS3/BS3) is one input to a clinical
+  classification combining multiple categories, not the classification
+  itself. ClinVar tier-2 → LOVD-API-derived is a label-quality
+  downgrade. Earlier-session "30× more rows" framing was rhetorical
+  and was flagged as such mid-session.
+- Silent-zero discovery requires checking the *trained* feature matrix
+  value distribution, not just connector logs. Connector logged the
+  zero count at INFO level once during the 13h regen and the line was
+  lost in training output. Recommend post-ETL assertion that any
+  feature with single-source contribution must have `nunique() > 1` in
+  the training matrix, with clear failure on zero variance. Extends
+  the 2026-04-17 audit recommendation (EVE, AlphaMissense, CADD) to
+  LOVD; same pattern likely affects other connectors on the 30+
+  all-zero list from `SESSION_2026-04-30.md` Finding #4.
+- `scripts/process_lovd.py` is dead code. Live LOVD merge is
+  `scripts/build_lovd_index.py` → `lovd_all_variants.parquet`. The
+  schema mismatch between the two scripts (`lovd_variants.parquet` vs
+  `lovd_all_variants.parquet`, `pathogenicity` vs `classification_raw`)
+  is a dead-code artifact, not a live bug. Cleanup candidate for a
+  separate post-Run-9 commit, low priority.
+- `outputs/run9_ready/splits/` is not `data/splits/`. `DataPrepConfig`
+  default and the run9 launch path differ. `docs/HANDOFF_run9_launch.md`
+  and the Vast.ai onstart script must reference the actual
+  `outputs/run9_ready/` path before Vast.ai launch.
+- 4/1 raw LOVD download integrity confirmed against admin's logged
+  ban window. TP53/PTEN/RB1 `.txt` files at 5:38–5:39 AM Eastern are
+  genuine; BRCA1/BRCA2/APC/MLH1/MSH2/MSH6/NF1 `.txt` files at the
+  same time are 96–98 byte error pages contemporaneous with the ban
+  (`[01/Apr/2026:10:53–12:34 +0200]` → 4:53–6:34 AM Eastern). 6:56 PM
+  `.json` files are post-unblock manual saves of
+  `?format=application/json` views, currently unconsumed by
+  `build_lovd_index.py`.
+- rclone Drive remote renamed `gvc` → `genvarcla`. `agent_data/`
+  namespace recreated on Drive with 5 subfolders (events, litcache,
+  drift_reports, modelscout, trainlifecycle). Local `agent_data/`
+  directory created. Smoke test (21-byte file round-trip) clean.
+- **Process violations (this session, all recorded in SESSION doc):**
+  `PASTE_FULL_PATH_HERE` placeholder in copy-pasteable command;
+  bash heredoc syntax in PowerShell context (already covered by
+  Windows-platform standing rule on file); loose grep regex framed as
+  decisive. Pattern across all three: confident framing on
+  under-constrained tooling. Recorded for future-self correction.
+
+### Run 10 sequencing (revised)
+- **R10-A:** Grep `outputs/run9_ready/regen.log` for the LOVD annotation
+  count line. Distinguishes Cause 1 (downstream overwrite) vs Cause 2
+  (upstream coordinate transformation).
+- **R10-B:** Patch identified cause. Add unit test asserting
+  `(df["lovd_variant_class"] > 0).sum() > 0` after the LOVD step on a
+  3×5 fixture with 1 expected match. Pattern modeled on
+  `tests/unit/test_spliceai_parquet_default.py` (commit 9ba3127) and
+  `tests/unit/test_esm2_activation.py` (2026-04-17).
+- **R10-C:** Re-regen splits on Vast.ai with LOVD live (no local
+  retraining per standing rule #19). Post-condition: ~4,500–5,500 of
+  5,553 inner-join matches in train.
+- **R10-D:** Originally-requested gene scope expansion (Paths 1+2: LOVD
+  raw + gnomAD/UniProt per-gene). Manual browser only per LOVD admin
+  emails of 2026-04-01.
+- Cleanup (low priority, post-Run-9): remove `scripts/process_lovd.py`
+  and orphaned `data/external/lovd/lovd_variants.parquet`.
+
+### Run 9 readiness after this session
+- Run 9 launch path **unaffected**. Run 9 inherits the same silent-zero
+  baseline as run9_ready (Test AUROC 0.9814, Val AUROC 0.9850). Adding
+  this INCIDENT as a known-pending item before Run 9 launch but not as
+  a launch blocker.
+- All four files for this session committed in a single commit:
+  `docs(session): 2026-05-02 — gene-scope expansion deferred; LOVD silent-zero INCIDENT`.

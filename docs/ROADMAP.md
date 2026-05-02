@@ -549,3 +549,47 @@ Build stats:
 Note: File was misnamed "masked.snv" — it is the full genome-wide unmasked
 VCF including indels. This is better: Run 8 will have splice site scoring
 for all variant types across all chromosomes.
+<!--
+  PASTE THIS BLOCK AT THE TOP OF THE Run 10 SECTION OF docs/ROADMAP.md.
+
+  If your ROADMAP has a Run 10 section already, paste the four R10-A
+  through R10-D items at the top of that section, before whatever was
+  there previously. The cleanup item belongs in a separate "Cleanup
+  (post-Run-9, low priority)" subsection if one exists, or as the last
+  item in Run 10 otherwise.
+
+  Do not paste this comment block into the ROADMAP — it's just guidance
+  for the human applying the prepend. Strip it after reading.
+-->
+
+## Run 10 — LOVD silent-zero remediation (prerequisite) + originally-scoped expansion
+
+**Prerequisite (LOVD silent-zero — see `INCIDENT_2026-05-02_lovd-silent-zero.md`):**
+
+- **R10-A** — Grep `outputs/run9_ready/regen.log` for `"Score annotation 15/16 (LOVD)"`. The integer in that line distinguishes:
+  - non-zero (~5,500): Cause 1 (downstream overwrite in `_engineer_features`/`_scale`)
+  - zero: Cause 2 (upstream coordinate transformation by one of steps 1–14)
+
+  Two-minute task. Result narrows the fix to one of two specific files.
+
+- **R10-B** — Patch identified cause. Add unit test asserting `(df["lovd_variant_class"] > 0).sum() > 0` after the LOVD step on a 3-row LOVD × 5-row ClinVar fixture with 1 expected match. Pattern modeled on `tests/unit/test_spliceai_parquet_default.py` (commit 9ba3127) and `tests/unit/test_esm2_activation.py` (2026-04-17 session).
+
+- **R10-C** — Re-regen splits on Vast.ai with LOVD live (no local retraining per standing rule #19). Post-condition assertion: roughly 4,500–5,500 of the 5,553 inner-join matches reach the train set, depending on gene-aware split distribution. If R10-C produces 0 again, R10-B is incomplete and R10-A may need to be re-checked under the new run's regen log.
+
+**Original Run 10 work (deferred from 2026-05-02 session):**
+
+- **R10-D** — Expand gene scope (Paths 1+2: LOVD raw downloads + gnomAD/UniProt per-gene query list). Manual browser only per LOVD admin emails of 2026-04-01. Discipline rules:
+  - One gene per browser tab, opened by hand, saved as `data/external/lovd/raw/{GENE}_variants.tsv` (or `.txt` per existing convention).
+  - Spaced over time — admin can see request inter-arrival times.
+  - `?format=tab` view only. No `modified_since` looping. No `/shared/genes/{GENE}` or `/shared/view/{GENE}` (human interface). No scripted fetcher.
+  - Prefer `https://databases.lovd.nl/shared/download/all/gene/{GENE}` if the curator has enabled it.
+
+  Rebuild the merged parquet via `scripts/build_lovd_index.py` (the live merge script — not the dead `scripts/process_lovd.py`). Re-regen splits on Vast.ai a second time.
+
+**Cleanup (post-Run-9, low priority):**
+
+- Remove `scripts/process_lovd.py` (dead code; live merge is `scripts/build_lovd_index.py`).
+- Remove orphaned `data/external/lovd/lovd_variants.parquet` (output of the dead script; not consumed by any active code path).
+- Remove `diag_lovd_join.py` from repo root (created during 2026-05-02 session as a one-shot diagnostic; useful as R10-B verification then removable).
+- Audit other connectors on the 30+ all-zero list from `SESSION_2026-04-30.md` Finding #4 for the same silent-zero pattern. Extends the 2026-04-17 audit recommendation (EVE, AlphaMissense, CADD).
+
