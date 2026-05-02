@@ -549,19 +549,6 @@ Build stats:
 Note: File was misnamed "masked.snv" — it is the full genome-wide unmasked
 VCF including indels. This is better: Run 8 will have splice site scoring
 for all variant types across all chromosomes.
-<!--
-  PASTE THIS BLOCK AT THE TOP OF THE Run 10 SECTION OF docs/ROADMAP.md.
-
-  If your ROADMAP has a Run 10 section already, paste the four R10-A
-  through R10-D items at the top of that section, before whatever was
-  there previously. The cleanup item belongs in a separate "Cleanup
-  (post-Run-9, low priority)" subsection if one exists, or as the last
-  item in Run 10 otherwise.
-
-  Do not paste this comment block into the ROADMAP — it's just guidance
-  for the human applying the prepend. Strip it after reading.
--->
-
 ## Run 10 — LOVD silent-zero remediation (prerequisite) + originally-scoped expansion
 
 **Prerequisite (LOVD silent-zero — see `INCIDENT_2026-05-02_lovd-silent-zero.md`):**
