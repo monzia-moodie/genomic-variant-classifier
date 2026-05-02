@@ -152,3 +152,10 @@ agent_layer/logs/
 # Session-scratch / diagnostic dumps
 diff_review.txt
 gnn_block_view.txt
+
+# Agent layer — local working set, synced to Drive separately
+agent_data/
+*.db
+*.db-shm
+*.db-wal
+.vscode/
