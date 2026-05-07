@@ -28,3 +28,24 @@ scipy>=1.12
 # (continual learning stack)
 
 # Testing — keep separate or use requirements-dev.in
+
+# Drift monitoring (added Stage 0 — corrected pins)
+# NOTE: alibi-detect dropped — 0.13.0 (latest, Dec 2025) still pins numpy<2.0
+# and is effectively unmaintained for numpy 2.x. Functionality replaced by
+# scipy.stats (KS, chi2), nannyml (CBPE), river (online drift), evidently
+# (tabular distribution drift). See docs/hypotheses/HYP_alibi-detect-numpy2-lag.md
+pandera>=0.24,<0.25
+evidently==0.7.6
+nannyml==0.13.0
+river>=0.22.0,<0.24
+great-expectations>=1.0,<2
+fairlearn==0.12.0
+defusedxml
+beautifulsoup4
+pyspark>=3.5.4,<4
+# Core ML — production deps that were missing from requirements.in (added 2026-05-07)
+torch>=2.0,<3
+torch-geometric>=2.5,<3
+networkx>=3.0,<4
+numba>=0.59,<1
+# pykan: add if your KAN code imports it directly (verify first with project_knowledge_search)
