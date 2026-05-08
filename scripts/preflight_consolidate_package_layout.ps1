@@ -137,10 +137,16 @@ else {
     "INFO  Skipping SHA256 compare (one or both files missing per check 10)"
 }
 
-# 12. Current bare imports work (baseline health check)
-$bareOut = & python -c "import agents, config, message_bus, shared_state; print('bareOK')" 2>&1
-if ($bareOut -match 'bareOK') { "OK    Bare agent_layer imports work (agents, config, message_bus, shared_state)" }
-else { "FAIL  Bare imports broken: $bareOut"; $failures += "bareimports" }
+# 12. Current bare imports work in their proper invocation context.
+# These imports are bare (`from agents.base_agent import BaseAgent`, `from config import ...`)
+# and only resolve when cwd is agent_layer/ — which is the case in production when
+# python agent_layer/run_agents.py is invoked, because Python prepends the script's
+# directory to sys.path. Test in that context, not from repo root.
+Push-Location .\agent_layer
+$bareOut = & python -c "from agents.base_agent import BaseAgent; from config import REQUIRE_HUMAN_APPROVAL; from message_bus import MessageBus; from shared_state import SharedState; print('bareOK')" 2>&1
+Pop-Location
+if ($bareOut -match 'bareOK') { "OK    Bare agent_layer imports work in agent_layer/ cwd context" }
+else { "FAIL  Bare imports broken in agent_layer/ context: $bareOut"; $failures += "bareimports" }
 
 # 13. src.api.main importable today
 $apiOut = & python -c "import src.api.main; print('apiOK')" 2>&1
