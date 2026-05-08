@@ -1,0 +1,7 @@
+ M .gitignore
+?? docs/archive/worktree-agent-afd2a1fa/
+?? docs/reviews/
+?? docs/sessions/SESSION_2026-05-08_preflight.txt
+?? scripts/migrate_pickles.py
+?? scripts/preflight_consolidate_package_layout.ps1
+?? tests/smoke_test_imports.py

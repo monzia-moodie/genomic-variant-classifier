@@ -1,0 +1,9 @@
+diff --git a/.gitignore b/.gitignore
+index 8349927..d1ab91f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -159,3 +159,4 @@ agent_data/
+ *.db-shm
+ *.db-wal
+ .vscode/
++diag_lovd_join.py
