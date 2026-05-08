@@ -1,0 +1,51 @@
+OK    CWD = C:\Projects\genomic-variant-classifier
+OK    PowerShell 7
+OK    Python 3.12.10
+OK    venv = .venv312
+OK    Working tree clean
+INFO  HEAD = 3d493a4 (expected b74daf1 or descendant)
+OK    src/__init__.py contains expected re-export
+OK    src/__init__.py re-exports have zero consumers (safe to drop)
+OK    setup.py is 587 bytes
+OK    No pre-existing pyproject.toml
+OK    monitoring/ absent
+INFO  egg-info dirs at root: genomic_variant_classifier.egg-info
+OK    Free space: 168.9 GB
+OK    models\phase2_pipeline.joblib - 2029.75 MB (expected 2029.75)
+OK    models\phase4_pipeline.joblib - 2036.06 MB (expected 2036.06)
+OK    models\phase4_pipeline_calibrated.joblib - 2036.06 MB (expected 2036.06)
+OK    models\v1\ensemble_v1.joblib - 1344.55 MB (expected 1344.55)
+OK    outputs\run9_ready\models\ensemble.joblib - 1478.4 MB (expected 1478.4)
+OK    experiments\2026-04-04_03-39\ensemble_v1.joblib - 1344.55 MB (expected 1344.55)
+OK    Both ensemble_v1.joblib copies SHA256-match: 64FEF61170E98FF722C338734819008A4F8307111D6AB97EC6BE14A29ADCEE23
+OK    Bare agent_layer imports work in agent_layer/ cwd context
+OK    src.api.main imports
+INFO  14 lines of 'import src.X.Y' form found (must be handled by C3 patch F-5):
+
+[32;1mPath                                                          [0m[32;1m LineNumber[0m[32;1m Line[0m
+[32;1m----                                                          [0m [32;1m----------[0m [32;1m----[0m
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         490     import src.api.main as api_main
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         515         import src.api.main as api_main
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         610         import src.api.main as api_main
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         660         import src.api.main as api_main
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         681         import src.api.main as api_main
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         696         import src.api.main as api_main
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         725         import src.api.main as api_main
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         741         import src.api.main as api_main
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         775         import src.api.auth as auth_module
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         786         import src.api.auth as auth_module
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         797         import src.api.auth as auth_module
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         808         import src.api.auth as auth_module
+C:\Projects\genomic-variant-classifier\tests\unit\test_api.py         819         import src.api.auth as auth_module
+C:\Projects\genomic-variant-classifier\tests\unit\test_core.py        878         import src.data.dbnsfp as m
+
+INFO  Non-.py files under src/: 0
+OK    No tests/tests/ glitch
+INFO  No .pre-commit-config.yaml
+INFO  No check_run_id_trailer.py found
+OK    validate_docs.py exists - re-run after C5 doc edits
+
+================================================================
+PRE-FLIGHT GREEN - safe to start C1.
+================================================================
+Exit code: 0
