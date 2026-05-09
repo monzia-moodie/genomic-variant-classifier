@@ -92,10 +92,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm 
 WORKDIR /app
 
 # Application source — only what inference needs
-COPY src/api/          src/api/
-COPY src/models/       src/models/
-COPY src/utils/        src/utils/
-COPY src/__init__.py   src/__init__.py
+COPY src/genomic_variant_classifier/api/  src/genomic_variant_classifier/api/
+COPY src/genomic_variant_classifier/models/  src/genomic_variant_classifier/models/
+COPY src/genomic_variant_classifier/utils/  src/genomic_variant_classifier/utils/
+COPY src/genomic_variant_classifier/__init__.py  src/genomic_variant_classifier/__init__.py
 
 # Model artefact placeholder — override at runtime via bind-mount or COPY
 RUN mkdir -p models
@@ -108,6 +108,7 @@ USER appuser
 # Default environment
 ENV MODEL_PATH=/app/models/phase4_pipeline.joblib \
     PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/app/src \
     GENE_SUMMARY_PATH=/app/data/processed/gene_summary.parquet \
     LOG_LEVEL=INFO \
     WORKERS=2 \
@@ -123,7 +124,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # gunicorn with uvicorn workers for async FastAPI
 CMD ["sh", "-c", \
-     "gunicorn src.api.main:app \
+     "gunicorn genomic_variant_classifier.api.main:app \
         -k uvicorn.workers.UvicornWorker \
         --bind 0.0.0.0:${PORT} \
         --workers ${WORKERS} \
@@ -146,6 +147,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Re-use builder venv but install full training stack on top
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/app/src \
     MODEL_PATH=models/phase4_pipeline.joblib \
     JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 
