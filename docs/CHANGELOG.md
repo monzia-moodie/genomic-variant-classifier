@@ -780,3 +780,79 @@ Docker build smoke test).
   a launch blocker.
 - All four files for this session committed in a single commit:
   `docs(session): 2026-05-02 — gene-scope expansion deferred; LOVD silent-zero INCIDENT`.
+
+## 2026-05-09: C3.6 hotfix + C4-prep complete
+
+### Attempted
+- Pre-condition audit for C4 pickle migration (Stage 1)
+- Spec compliance audit of `scripts/migrate_pickles.py` (Stage 2)
+- Functional smoke of `install_compat_aliases` (Stage 2 D)
+- L119 patch for AttributeError on `_new_root.agent_layer` (Stage 2.5b)
+- Diagnose namespace-vs-regular package status of `agent_layer` (Stage 2.5c)
+- Add `agent_layer/__init__.py` and re-test alias count (Stage 2.5d)
+- C3.6 hotfix: sweep bare imports of `agents`/`config`/`message_bus`/`shared_state` (Stage 2.5e)
+- Build `tests/fixtures/migration_smoke.parquet` (Stage 3)
+- Final readiness check (Stage 4)
+- Two-commit push: C3.6 hotfix + C4-prep (Stage A + B)
+
+### Failed
+- Initial `install_compat_aliases` smoke threw `AttributeError: module
+  'genomic_variant_classifier' has no attribute 'agent_layer'` at L122.
+  Bare `import genomic_variant_classifier as _new_root` does not bind subpackage
+  attributes; explicit `import genomic_variant_classifier.agent_layer` needed.
+- First `__init__.py` retry showed only 22/28 `agent_layer.*` aliases registered;
+  6 walk_failures from bare imports in `base_agent`, `data_freshness_agent`,
+  `interpretability_agent`, `literature_scout_agent`, `training_lifecycle_agent`,
+  and `orchestrator`. C3 regex sweep had missed these.
+- Stage 3 reported `WARN: column count 81 != 78` — false alarm; PowerShell `-match`
+  against a multi-line string array does NOT populate `$Matches`; stale value from
+  prior smoke test `SRC=81` capture was used. Fixture is verified 78 cols by the
+  python output itself (`COLS=78`).
+
+### Fixed
+- `src/genomic_variant_classifier/agent_layer/__init__.py` created (empty;
+  promotes namespace -> regular package; C1 sweep miss resolved).
+- `scripts/migrate_pickles.py` L119: explicit
+  `import genomic_variant_classifier.agent_layer` added before
+  `_new_root.agent_layer` access; C2-spec docstring still aligns.
+- 8 files in `src/genomic_variant_classifier/agent_layer/` rewritten to
+  fully-qualified imports (44 lines, +1716 bytes total): `agents/base_agent.py`,
+  `agents/data_freshness_agent.py`, `agents/interpretability_agent.py`,
+  `agents/literature_scout_agent.py`, `agents/training_lifecycle_agent.py`,
+  `orchestrator.py`, `run_agents.py`, `test_message_bus.py`.
+- `tests/fixtures/migration_smoke.parquet` committed (force-added; 8 x 78,
+  48830 bytes, deterministic `df.head(8)` from
+  `outputs/run9_ready/splits/X_test.parquet` head; live 78-col schema).
+
+### Learned
+- `pkgutil.walk_packages` does NOT recurse into PEP 420 namespace packages by
+  default. Empty `__init__.py` converts namespace -> regular package, enabling
+  walk recursion. Future migration sweeps should add post-condition tests that
+  walk the full module tree.
+- C3 regex patterns 6 and 7 (per spec) lacked `\b` word boundaries, allowing
+  over-match against names like `agents_helper`. The C3.6 sweep script added
+  `\b` as defensive hardening. No actual collisions in current codebase, but
+  `\b` is now the preferred pattern for any future migration sweeps.
+- PowerShell `-match` against an array filters but does NOT populate `$Matches`.
+  To extract groups from multi-line `python -c` stdout, either `-join "n"` to
+  collapse first, or use `Where-Object { $_ -match ... }` in pipeline. Bug in
+  Stage 3 column-count check was benign (false WARN) but worth fixing in
+  future scripts.
+- Pre-migration `find_packages()` at repo root discovered `agent_layer/` AND its
+  subpackages as TOP-LEVEL packages. So bare `from agents import X` worked
+  because `agents` was on `sys.path`. After C1 nested it under
+  `genomic_variant_classifier/`, those bare names broke. C3 regex sweep should
+  have caught all instances; missed 8 files. Root cause for the miss is not
+  fully diagnosed (C3 spec patterns are correct; possibly file-glob omission or
+  later re-introduction during C3.x hotfixes — neither verified).
+
+### Refs
+- Commits: `e0f4c6e` (C3.6 hotfix), `e34ce7b` (C4-prep)
+- HEAD before session: `fc7f63a`
+- HEAD after session: `e34ce7b`
+- INCIDENT: `docs/incidents/INCIDENT_2026-05-09_c1-c3-sweep-misses.md`
+- Session: `docs/sessions/SESSION_2026-05-09.md`
+- Spec: `docs/hypotheses/HYP_consolidate-package-layout.md` (C1, C3, C4 sections)
+- Operational tooling (in `agent_data/`, NOT in repo):
+  `c4_fix_install_compat.py`, `c4_diagnose_walk.py`, `c4_fix_bare_imports.py`,
+  `c4_batch_C36_through_4.ps1`, `c4_batch_commits.ps1`
