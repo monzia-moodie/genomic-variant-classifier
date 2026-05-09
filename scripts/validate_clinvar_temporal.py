@@ -413,7 +413,7 @@ def main() -> None:
         am_parquet = Path("data/external/alphamissense/AlphaMissense_hg38.tsv.gz")
     if am_parquet.exists():
         try:
-            from src.data.alphamissense import AlphaMissenseConnector
+            from genomic_variant_classifier.data.alphamissense import AlphaMissenseConnector
             am = AlphaMissenseConnector(tsv_path=str(am_parquet))
             am_df = am.fetch(labeled)
             if "alphamissense_score" in am_df.columns:
@@ -431,7 +431,7 @@ def main() -> None:
     # Load model (after annotation DFs freed)
     # -----------------------------------------------------------------------
     logger.info("Loading model from %s ...", args.model)
-    from src.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
     pipeline = InferencePipeline.load(args.model)
     logger.info("Model val_auroc=%.4f, n_features=%d",
                 pipeline.metadata.val_auroc, pipeline.metadata.n_features)

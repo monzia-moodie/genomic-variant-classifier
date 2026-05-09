@@ -546,12 +546,12 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Delayed heavy imports (keeps --help responsive) ───────────────────
-    from src.models.variant_ensemble import (
+    from genomic_variant_classifier.models.variant_ensemble import (
         EnsembleConfig,
         VariantEnsemble,
     )
-    from src.evaluation.evaluator import ClinicalEvaluator
-    from src.evaluation.prediction_artifacts import RunArtifactWriter
+    from genomic_variant_classifier.evaluation.evaluator import ClinicalEvaluator
+    from genomic_variant_classifier.evaluation.prediction_artifacts import RunArtifactWriter
 
     # ── Load splits ───────────────────────────────────────────────────────
     splits = load_splits(args.splits_dir)

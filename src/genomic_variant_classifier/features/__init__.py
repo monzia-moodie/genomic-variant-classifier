@@ -1,5 +1,5 @@
 """Feature engineering modules."""
-from src.features.engineering import (
+from genomic_variant_classifier.features.engineering import (
 FeatureEngineeringPipeline,
 ACMGEvidence,
 PopulationFrequencyFeatures,

@@ -11,7 +11,7 @@ import pandas as pd
 import yaml
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from src.utils.helpers import load_config
+from genomic_variant_classifier.utils.helpers import load_config
 
 
 logger = logging.getLogger(__name__)

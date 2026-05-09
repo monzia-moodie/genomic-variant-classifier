@@ -30,7 +30,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from src.models.variant_ensemble import TABULAR_FEATURES, engineer_features
+from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, engineer_features
 
 logger = logging.getLogger(__name__)
 
@@ -423,7 +423,7 @@ def _score_to_result(
     uncertainty_aleatoric: float = 0.0,
 ) -> dict[str, Any]:
     """Convert a raw pathogenicity probability to a labelled result dict."""
-    from src.api.schemas import score_to_classification
+    from genomic_variant_classifier.api.schemas import score_to_classification
 
     classification, confidence = score_to_classification(score)
     return {

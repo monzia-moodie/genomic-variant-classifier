@@ -23,7 +23,7 @@ CHANGES — LOVD integration:
   - lovd_variant_class added to _engineer_features()
 
 Usage:
-    from src.data.real_data_prep import DataPrepPipeline
+    from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline
     pipeline = DataPrepPipeline()
     X_train, X_val, X_test, y_train, y_val, y_test, meta_val, meta_test = pipeline.run(
         clinvar_path="data/processed/clinvar_grch38.parquet",
@@ -44,10 +44,10 @@ from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import compute_class_weight
 
-from src.data.dbnsfp import DbNSFPConnector
-from src.data.phylop import PhyloPConnector
-from src.data.cadd import CADDConnector
-from src.data.spliceai import SpliceAIConnector
+from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector
+from genomic_variant_classifier.data.phylop import PhyloPConnector
+from genomic_variant_classifier.data.cadd import CADDConnector
+from genomic_variant_classifier.data.spliceai import SpliceAIConnector
 
 logger = logging.getLogger(__name__)
 
@@ -400,7 +400,7 @@ class DataPrepPipeline:
         n_null = int(df["allele_freq"].isna().sum())
         if n_null > 0:
             if kg_path:
-                from src.data.thousandgenomes import ThousandGenomesConnector
+                from genomic_variant_classifier.data.thousandgenomes import ThousandGenomesConnector
 
                 kg = ThousandGenomesConnector(kg_path)
                 df = kg.fill_missing_af(df)
@@ -417,12 +417,12 @@ class DataPrepPipeline:
 
         # FinnGen R10: third-tier AF fallback after gnomAD and 1KGP
         if self.annotation_config.finngen_path:
-            from src.data.finngen import FinnGenConnector
+            from genomic_variant_classifier.data.finngen import FinnGenConnector
 
             finngen = FinnGenConnector(tsv_path=self.annotation_config.finngen_path)
             df = finngen.annotate(df)
         else:
-            from src.data.finngen import FinnGenConnector, FINNGEN_COLUMNS
+            from genomic_variant_classifier.data.finngen import FinnGenConnector, FINNGEN_COLUMNS
 
             for col in FINNGEN_COLUMNS:
                 if col not in df.columns:
@@ -560,7 +560,7 @@ class DataPrepPipeline:
 
         # 5. AlphaMissense
         if ac.alphamissense_path is not None:
-            from src.data.alphamissense import AlphaMissenseConnector
+            from genomic_variant_classifier.data.alphamissense import AlphaMissenseConnector
 
             am = AlphaMissenseConnector(tsv_path=ac.alphamissense_path)
             df = am.fetch(variant_df=df)
@@ -578,7 +578,7 @@ class DataPrepPipeline:
 
         # 6. GTEx
         if ac.gtex_genes:
-            from src.data.gtex import GTExConnector, build_gtex_feature_df
+            from genomic_variant_classifier.data.gtex import GTExConnector, build_gtex_feature_df
 
             gtex = GTExConnector()
             gtex.fetch(
@@ -602,7 +602,7 @@ class DataPrepPipeline:
         )
 
         # 7. VEP
-        from src.data.vep import VEPConnector
+        from genomic_variant_classifier.data.vep import VEPConnector
 
         vep = VEPConnector()
         df = vep.annotate_dataframe(df)
@@ -617,7 +617,7 @@ class DataPrepPipeline:
         )
 
         # 8. OMIM
-        from src.data.omim import OMIMConnector
+        from genomic_variant_classifier.data.omim import OMIMConnector
 
         omim = OMIMConnector(mim2gene_path=ac.omim_path)
         df = omim.annotate_dataframe(df)
@@ -632,7 +632,7 @@ class DataPrepPipeline:
         )
 
         # 9. ClinGen
-        from src.data.clingen import ClinGenConnector
+        from genomic_variant_classifier.data.clingen import ClinGenConnector
 
         clingen = ClinGenConnector(csv_path=ac.clingen_path)
         df = clingen.annotate_dataframe(df)
@@ -650,7 +650,7 @@ class DataPrepPipeline:
         )
 
         # 10. dbSNP
-        from src.data.dbsnp import DbSNPConnector
+        from genomic_variant_classifier.data.dbsnp import DbSNPConnector
 
         dbsnp = DbSNPConnector(parquet_path=ac.dbsnp_path)
         df = dbsnp.annotate_dataframe(df)
@@ -664,7 +664,7 @@ class DataPrepPipeline:
         )
 
         # 11. EVE
-        from src.data.eve import EVEConnector
+        from genomic_variant_classifier.data.eve import EVEConnector
 
         eve = EVEConnector(eve_path=ac.eve_path)
         df = eve.annotate_dataframe(df)
@@ -680,7 +680,7 @@ class DataPrepPipeline:
 
         # 12. HGMD
         if ac.hgmd_path is not None:
-            from src.data.hgmd import HGMDConnector
+            from genomic_variant_classifier.data.hgmd import HGMDConnector
 
             hgmd = HGMDConnector(hgmd_path=ac.hgmd_path)
             df = hgmd.annotate_dataframe(df)
@@ -702,7 +702,7 @@ class DataPrepPipeline:
 
         # 13. RNA splice-isoform pipeline (Phase 6.1)
         if ac.rna_pipeline:
-            from src.pipelines.rna_pipeline import RNASpliceIsoformPipeline
+            from genomic_variant_classifier.pipelines.rna_pipeline import RNASpliceIsoformPipeline
 
             rna = RNASpliceIsoformPipeline()
             df = rna.annotate_dataframe(df)
@@ -722,7 +722,7 @@ class DataPrepPipeline:
                 df[col] = val
 
         # 14. Protein structure pipeline (Phase 6.2)
-        from src.pipelines.protein_pipeline import ProteinStructurePipeline
+        from genomic_variant_classifier.pipelines.protein_pipeline import ProteinStructurePipeline
 
         protein = ProteinStructurePipeline(cache_dir=ac.protein_cache_dir)
         df = protein.annotate_dataframe(df)
@@ -732,7 +732,7 @@ class DataPrepPipeline:
         )
 
         # 15. LOVD: variant classification (ordinal 0-4)
-        from src.data.lovd import LOVDConnector
+        from genomic_variant_classifier.data.lovd import LOVDConnector
 
         lovd = LOVDConnector(parquet_path=ac.lovd_path)
         df = lovd.annotate_dataframe(df)
@@ -750,7 +750,7 @@ class DataPrepPipeline:
 
         # 16. ESM-2 protein language model delta norm (Phase 3C)
         # Stub mode (esm2_delta_norm = 0.0) when transformers/torch not installed.
-        from src.data.esm2 import ESM2Connector
+        from genomic_variant_classifier.data.esm2 import ESM2Connector
 
         esm2 = ESM2Connector(
             model_name=ac.esm2_model_name,
@@ -770,7 +770,7 @@ class DataPrepPipeline:
         )
 
         # 17. gnomAD v4.1 gene constraint (pLI, LOEUF, syn_z, mis_z) — Phase 3C
-        from src.data.connectors.connector_gnomad_constraint import (
+        from genomic_variant_classifier.data.connectors.connector_gnomad_constraint import (
             GnomADConstraintConnector,
         )
 

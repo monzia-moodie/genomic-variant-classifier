@@ -20,7 +20,7 @@ tree models exploit the natural ordering.
 
 Usage
 -----
-    from src.data.lovd import LOVDConnector
+    from genomic_variant_classifier.data.lovd import LOVDConnector
     lovd = LOVDConnector(parquet_path="data/external/lovd/lovd_all_variants.parquet")
     df = lovd.annotate_dataframe(df)
 """

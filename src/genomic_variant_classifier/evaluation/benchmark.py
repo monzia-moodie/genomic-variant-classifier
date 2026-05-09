@@ -29,8 +29,8 @@ Usage (script)
 
 Usage (Python API)
 ------------------
-  from src.evaluation.benchmark import BenchmarkRunner
-  from src.models.variant_ensemble import TABULAR_FEATURES
+  from genomic_variant_classifier.evaluation.benchmark import BenchmarkRunner
+  from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
 
   runner = BenchmarkRunner(n_folds=5, random_state=42)
   results = runner.run(X, y, feature_names=TABULAR_FEATURES)
@@ -85,8 +85,8 @@ try:
 except ImportError:
     _XGB_AVAILABLE = False
 
-from src.models.kan import KANClassifier
-from src.models.mc_dropout import DeepEnsembleWrapper
+from genomic_variant_classifier.models.kan import KANClassifier
+from genomic_variant_classifier.models.mc_dropout import DeepEnsembleWrapper
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +460,7 @@ def main() -> None:
 
     args = _parse_args()
 
-    from src.models.variant_ensemble import TABULAR_FEATURES
+    from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
 
     logger.info("Loading %s ...", args.parquet)
     df = pd.read_parquet(args.parquet)

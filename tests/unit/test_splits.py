@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.data.splits import (
+from genomic_variant_classifier.data.splits import (
     gene_stratified_split,
     split_summary,
     unseen_gene_holdout_split,

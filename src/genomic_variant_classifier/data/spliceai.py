@@ -46,7 +46,7 @@ from typing import Optional
  
 import pandas as pd
  
-from src.data.database_connectors import (
+from genomic_variant_classifier.data.database_connectors import (
     CANONICAL_COLUMNS,
     BaseConnector,
     FetchConfig,

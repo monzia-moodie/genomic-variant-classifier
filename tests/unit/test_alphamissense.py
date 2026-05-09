@@ -33,13 +33,13 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from src.data.alphamissense import (
+from genomic_variant_classifier.data.alphamissense import (
     AM_BENIGN_THRESHOLD,
     AM_DEFAULT_SCORE,
     AM_PATHOGENIC_THRESHOLD,
     AlphaMissenseConnector,
 )
-from src.models.variant_ensemble import TABULAR_FEATURES, engineer_features
+from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, engineer_features
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -132,7 +132,7 @@ def test_missing_file_logs_warning_and_returns_default(tmp_path, caplog):
     df = _minimal_variant_df()
     # Patch cache so a cached lookup from another test doesn't mask the missing-file path
     with patch.object(connector, "_load_cache", return_value=None):
-        with caplog.at_level(logging.WARNING, logger="src.data.alphamissense"):
+        with caplog.at_level(logging.WARNING, logger="genomic_variant_classifier.data.alphamissense"):
             result = connector.fetch(variant_df=df)
     assert result["alphamissense_score"].iloc[0] == pytest.approx(AM_DEFAULT_SCORE)
     assert any("not found" in r.getMessage().lower() or "tsv" in r.getMessage().lower()
@@ -228,7 +228,7 @@ def test_annotate_chr_prefixed_chrom_normalised():
 # ---------------------------------------------------------------------------
 
 def test_fetch_round_trip(tmp_path):
-    from src.data.database_connectors import FetchConfig
+    from genomic_variant_classifier.data.database_connectors import FetchConfig
     path = _make_tsv_gz(tmp_path)
     # Isolate cache to tmp_path so a shared real-data cache cannot pollute the test
     connector = AlphaMissenseConnector(tsv_path=path, config=FetchConfig(cache_dir=tmp_path))
@@ -278,7 +278,7 @@ def test_alphamissense_score_in_tabular_features():
 
 
 def test_alphamissense_score_not_in_phase_2():
-    from src.models.variant_ensemble import PHASE_2_FEATURES
+    from genomic_variant_classifier.models.variant_ensemble import PHASE_2_FEATURES
     assert "alphamissense_score" not in PHASE_2_FEATURES
 
 

@@ -94,7 +94,7 @@ def main() -> int:
     args = parser.parse_args()
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from src.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
 
     # ---- load cohort ----
     logger.info("Loading LOVD cohort from %s ...", args.cohort)

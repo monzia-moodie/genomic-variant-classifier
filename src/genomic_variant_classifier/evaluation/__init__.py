@@ -6,7 +6,7 @@ Clinical evaluation package for the Genomic Variant Classifier.
 
 from __future__ import annotations
 
-from src.evaluation.evaluator import (
+from genomic_variant_classifier.evaluation.evaluator import (
     ClinicalEvaluator,
     ConsequenceBreakdown,
     EvaluationReport,
@@ -23,4 +23,4 @@ __all__ = [
     "OperatingPoint",
     "compare_models",
 ]
-from src.evaluation.prediction_artifacts import RunArtifactWriter
+from genomic_variant_classifier.evaluation.prediction_artifacts import RunArtifactWriter

@@ -15,7 +15,7 @@ Coverage targets:
 
 CHANGES FROM PHASE 1:
   - All imports from src.data_ingestion.* changed to src.data.* (Bug 4).
-  - All imports from src.models.ensemble changed to src.models.variant_ensemble (Bug 5).
+  - All imports from genomic_variant_classifier.models.ensemble changed to src.models.variant_ensemble (Bug 5).
   - Shared test fixtures extracted to tests/fixtures/make_synthetic_data.py (Issue E).
   - from __future__ import annotations added (Issue N).
 """
@@ -83,13 +83,13 @@ def sample_labels(sample_canonical_df):
 class TestClinVarConnector:
     def test_map_pathogenicity_pathogenic(self):
         # CHANGE: import path updated from src.data_ingestion → src.data (Bug 4)
-        from src.data.database_connectors import ClinVarConnector
+        from genomic_variant_classifier.data.database_connectors import ClinVarConnector
         assert ClinVarConnector._map_pathogenicity("Pathogenic") == "pathogenic"
         assert ClinVarConnector._map_pathogenicity("Likely pathogenic") == "likely_pathogenic"
 
     def test_map_pathogenicity_compound_values(self):
         """Compound ClinVar values like 'Pathogenic, risk factor' must map correctly."""
-        from src.data.database_connectors import ClinVarConnector
+        from genomic_variant_classifier.data.database_connectors import ClinVarConnector
         # Would have returned "uncertain" in original (exact set membership)
         # Now uses substring matching (Issue G)
         assert ClinVarConnector._map_pathogenicity("Pathogenic, risk factor") == "pathogenic"
@@ -97,18 +97,18 @@ class TestClinVarConnector:
         assert ClinVarConnector._map_pathogenicity("Benign/Likely benign") == "benign"
 
     def test_map_pathogenicity_benign(self):
-        from src.data.database_connectors import ClinVarConnector
+        from genomic_variant_classifier.data.database_connectors import ClinVarConnector
         assert ClinVarConnector._map_pathogenicity("Benign") == "benign"
         assert ClinVarConnector._map_pathogenicity("Likely benign") == "likely_benign"
 
     def test_map_pathogenicity_uncertain(self):
-        from src.data.database_connectors import ClinVarConnector
+        from genomic_variant_classifier.data.database_connectors import ClinVarConnector
         assert ClinVarConnector._map_pathogenicity("Uncertain significance") == "uncertain"
         assert ClinVarConnector._map_pathogenicity(None) == "uncertain"
         assert ClinVarConnector._map_pathogenicity("") == "uncertain"
 
     def test_to_canonical_fills_missing_columns(self, sample_canonical_df):
-        from src.data.database_connectors import BaseConnector, CANONICAL_COLUMNS
+        from genomic_variant_classifier.data.database_connectors import BaseConnector, CANONICAL_COLUMNS
         connector = BaseConnector()
         partial_df = sample_canonical_df[["variant_id", "chrom", "pos"]].copy()
         result = connector._to_canonical(partial_df)
@@ -116,7 +116,7 @@ class TestClinVarConnector:
         assert len(result) == len(partial_df)
 
     def test_canonical_columns_complete(self):
-        from src.data.database_connectors import CANONICAL_COLUMNS
+        from genomic_variant_classifier.data.database_connectors import CANONICAL_COLUMNS
         required = {
             "variant_id", "source_db", "chrom", "pos", "ref", "alt",
             "gene_symbol", "pathogenicity", "allele_freq",
@@ -150,7 +150,7 @@ class TestSIFTPolyPhenConnector:
     @pytest.fixture
     def connector(self):
         """Connector with a small synthetic in-memory index (no file I/O)."""
-        from src.data.sift_polyphen import SIFTPolyPhenConnector, _normalise_chrom
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector, _normalise_chrom
         c = SIFTPolyPhenConnector(sift_polyphen_file=None)
         # Inject a synthetic index directly — mirrors what _df_to_index produces
         c._index = {
@@ -176,11 +176,11 @@ class TestSIFTPolyPhenConnector:
     # ------------------------------------------------------------------
 
     def test_module_imports_cleanly(self):
-        from src.data.sift_polyphen import SIFTPolyPhenConnector
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector
         assert SIFTPolyPhenConnector is not None
 
     def test_constants_exported(self):
-        from src.data.sift_polyphen import (
+        from genomic_variant_classifier.data.sift_polyphen import (
             DEFAULT_SIFT,
             DEFAULT_PP2,
             SIFT_DELETERIOUS_THRESHOLD,
@@ -192,7 +192,7 @@ class TestSIFTPolyPhenConnector:
         assert PP2_PROBABLY_DAMAGING_THRESHOLD == pytest.approx(0.908)
 
     def test_source_name(self):
-        from src.data.sift_polyphen import SIFTPolyPhenConnector
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector
         assert SIFTPolyPhenConnector.source_name == "sift_polyphen"
 
     # ------------------------------------------------------------------
@@ -200,18 +200,18 @@ class TestSIFTPolyPhenConnector:
     # ------------------------------------------------------------------
 
     def test_stub_mode_returns_default_sift(self):
-        from src.data.sift_polyphen import SIFTPolyPhenConnector, DEFAULT_SIFT
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector, DEFAULT_SIFT
         c = SIFTPolyPhenConnector(sift_polyphen_file=None)
         assert c.get_sift_score("17", 43071077, "G", "T") == DEFAULT_SIFT
 
     def test_stub_mode_returns_default_pp2(self):
-        from src.data.sift_polyphen import SIFTPolyPhenConnector, DEFAULT_PP2
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector, DEFAULT_PP2
         c = SIFTPolyPhenConnector(sift_polyphen_file=None)
         assert c.get_pp2_score("17", 43071077, "G", "T") == DEFAULT_PP2
 
     def test_stub_mode_annotate_dataframe(self, minimal_df):
         """Stub connector must annotate without raising; columns filled with defaults."""
-        from src.data.sift_polyphen import (
+        from genomic_variant_classifier.data.sift_polyphen import (
             SIFTPolyPhenConnector, DEFAULT_SIFT, DEFAULT_PP2,
         )
         c = SIFTPolyPhenConnector(sift_polyphen_file=None)
@@ -228,7 +228,7 @@ class TestSIFTPolyPhenConnector:
         assert score == pytest.approx(0.03)
 
     def test_missing_variant_returns_default_sift(self, connector):
-        from src.data.sift_polyphen import DEFAULT_SIFT
+        from genomic_variant_classifier.data.sift_polyphen import DEFAULT_SIFT
         score = connector.get_sift_score("2", 999999, "A", "C")
         assert score == DEFAULT_SIFT
 
@@ -263,7 +263,7 @@ class TestSIFTPolyPhenConnector:
         assert score == pytest.approx(0.95)
 
     def test_missing_variant_returns_default_pp2(self, connector):
-        from src.data.sift_polyphen import DEFAULT_PP2
+        from genomic_variant_classifier.data.sift_polyphen import DEFAULT_PP2
         score = connector.get_pp2_score("2", 999999, "A", "C")
         assert score == DEFAULT_PP2
 
@@ -306,7 +306,7 @@ class TestSIFTPolyPhenConnector:
         assert result.loc[0, "polyphen2_score"] == pytest.approx(0.95)   # chr17
 
     def test_annotate_default_for_miss(self, connector):
-        from src.data.sift_polyphen import DEFAULT_SIFT, DEFAULT_PP2
+        from genomic_variant_classifier.data.sift_polyphen import DEFAULT_SIFT, DEFAULT_PP2
         miss_df = pd.DataFrame({
             "chrom": ["2"], "pos": [999999], "ref": ["A"], "alt": ["C"],
         })
@@ -315,7 +315,7 @@ class TestSIFTPolyPhenConnector:
         assert result.loc[0, "polyphen2_score"] == DEFAULT_PP2
 
     def test_annotate_mixed_hits_and_misses(self, connector):
-        from src.data.sift_polyphen import DEFAULT_SIFT, DEFAULT_PP2
+        from genomic_variant_classifier.data.sift_polyphen import DEFAULT_SIFT, DEFAULT_PP2
         df = pd.DataFrame({
             "chrom": ["17",      "2"],
             "pos":   [43071077,  999999],
@@ -358,27 +358,27 @@ class TestSIFTPolyPhenConnector:
     # ------------------------------------------------------------------
 
     def test_parse_multival_min_basic(self):
-        from src.data.sift_polyphen import _parse_multival
+        from genomic_variant_classifier.data.sift_polyphen import _parse_multival
         assert _parse_multival("0.04;0.12;0.01", "min") == pytest.approx(0.01)
 
     def test_parse_multival_max_basic(self):
-        from src.data.sift_polyphen import _parse_multival
+        from genomic_variant_classifier.data.sift_polyphen import _parse_multival
         assert _parse_multival("0.2;.;0.9", "max") == pytest.approx(0.9)
 
     def test_parse_multival_all_missing_returns_none(self):
-        from src.data.sift_polyphen import _parse_multival
+        from genomic_variant_classifier.data.sift_polyphen import _parse_multival
         assert _parse_multival(".", "min")     is None
         assert _parse_multival(".;.;.", "max") is None
         assert _parse_multival("", "min")      is None
         assert _parse_multival(None, "min")    is None
 
     def test_parse_multival_single_value(self):
-        from src.data.sift_polyphen import _parse_multival
+        from genomic_variant_classifier.data.sift_polyphen import _parse_multival
         assert _parse_multival("0.03", "min") == pytest.approx(0.03)
 
     def test_parse_multival_already_float(self):
         """pandas may pass a float directly for single-transcript genes."""
-        from src.data.sift_polyphen import _parse_multival
+        from genomic_variant_classifier.data.sift_polyphen import _parse_multival
         assert _parse_multival(0.07, "min") == pytest.approx(0.07)
 
     # ------------------------------------------------------------------
@@ -386,7 +386,7 @@ class TestSIFTPolyPhenConnector:
     # ------------------------------------------------------------------
 
     def test_df_to_index_keys_are_normalised(self):
-        from src.data.sift_polyphen import SIFTPolyPhenConnector
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector
         df = pd.DataFrame({
             "chrom":         ["chr17"],
             "pos":           [43071077],
@@ -399,7 +399,7 @@ class TestSIFTPolyPhenConnector:
         assert ("17", 43071077, "G", "T") in index
 
     def test_df_to_index_values_are_float_tuples(self):
-        from src.data.sift_polyphen import SIFTPolyPhenConnector
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector
         df = pd.DataFrame({
             "chrom":         ["17"],
             "pos":           [43071077],
@@ -418,7 +418,7 @@ class TestSIFTPolyPhenConnector:
     # ------------------------------------------------------------------
 
     def test_file_based_annotation(self, tmp_path):
-        from src.data.sift_polyphen import SIFTPolyPhenConnector
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector
         # Minimal synthetic dbNSFP v4.x TSV
         content = (
             "#chr\tpos(1-based)\tref\talt\tSIFT_score\tPolyphen2_HDIV_score\n"
@@ -447,12 +447,12 @@ class TestSIFTPolyPhenConnector:
         assert result.loc[1, "polyphen2_score"] == pytest.approx(0.12)
 
         # chr13: both dots → defaults (0.5)
-        from src.data.sift_polyphen import DEFAULT_SIFT, DEFAULT_PP2
+        from genomic_variant_classifier.data.sift_polyphen import DEFAULT_SIFT, DEFAULT_PP2
         assert result.loc[2, "sift_score"]      == DEFAULT_SIFT
         assert result.loc[2, "polyphen2_score"] == DEFAULT_PP2
 
     def test_parquet_cache_used_on_second_call(self, tmp_path):
-        from src.data.sift_polyphen import SIFTPolyPhenConnector
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector
         content = (
             "#chr\tpos(1-based)\tref\talt\tSIFT_score\tPolyphen2_HDIV_score\n"
             "17\t43071077\tG\tT\t0.03\t0.95\n"
@@ -477,7 +477,7 @@ class TestSIFTPolyPhenConnector:
     # ------------------------------------------------------------------
 
     def test_scores_flow_into_feature_matrix(self, connector):
-        from src.models.variant_ensemble import engineer_features, TABULAR_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features, TABULAR_FEATURES
         df = pd.DataFrame({
             "variant_id":  ["test:17:43071077:G:T"],
             "chrom":       ["17"],
@@ -497,11 +497,11 @@ class TestSIFTPolyPhenConnector:
         assert feats.loc[0, "polyphen2_score"] == pytest.approx(0.95)
 
     def test_sift_score_in_tabular_features(self):
-        from src.models.variant_ensemble import TABULAR_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
         assert "sift_score" in TABULAR_FEATURES
 
     def test_polyphen2_score_in_tabular_features(self):
-        from src.models.variant_ensemble import TABULAR_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
         assert "polyphen2_score" in TABULAR_FEATURES 
         
 # ---------------------------------------------------------------------------
@@ -519,7 +519,7 @@ class TestDbNSFPConnector:
     def connector(self):
         """Connector with a synthetic in-memory index covering four variants."""
         import pandas as pd
-        from src.data.dbnsfp import DbNSFPConnector
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector
         c = DbNSFPConnector(dbnsfp_file=None)
         c._index = pd.DataFrame([
             # BRCA1 missense — deleterious across all tools
@@ -551,11 +551,11 @@ class TestDbNSFPConnector:
     # ------------------------------------------------------------------
 
     def test_module_imports_cleanly(self):
-        from src.data.dbnsfp import DbNSFPConnector
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector
         assert DbNSFPConnector is not None
 
     def test_score_defaults_exported(self):
-        from src.data.dbnsfp import (
+        from genomic_variant_classifier.data.dbnsfp import (
             DEFAULT_SIFT, DEFAULT_PP2, DEFAULT_REVEL,
             DEFAULT_CADD, DEFAULT_PHYLOP, DEFAULT_GERP,
         )
@@ -567,11 +567,11 @@ class TestDbNSFPConnector:
         assert DEFAULT_GERP   == 0.0
 
     def test_source_name(self):
-        from src.data.dbnsfp import DbNSFPConnector
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector
         assert DbNSFPConnector.source_name == "dbnsfp"
 
     def test_dbnsfp_scores_dataclass(self):
-        from src.data.dbnsfp import DbNSFPScores, DEFAULT_SIFT, DEFAULT_GERP
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPScores, DEFAULT_SIFT, DEFAULT_GERP
         s = DbNSFPScores()
         assert s.sift_score  == DEFAULT_SIFT
         assert s.gerp_score  == DEFAULT_GERP
@@ -582,7 +582,7 @@ class TestDbNSFPConnector:
         }
 
     def test_dbnsfp_scores_is_frozen(self):
-        from src.data.dbnsfp import DbNSFPScores
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPScores
         s = DbNSFPScores(sift_score=0.1)
         with pytest.raises((AttributeError, TypeError)):
             s.sift_score = 0.9  # type: ignore[misc]
@@ -592,13 +592,13 @@ class TestDbNSFPConnector:
     # ------------------------------------------------------------------
 
     def test_stub_mode_get_scores_returns_defaults(self):
-        from src.data.dbnsfp import DbNSFPConnector, _DEFAULT_SCORES
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector, _DEFAULT_SCORES
         c = DbNSFPConnector(dbnsfp_file=None)
         scores = c.get_scores("17", 43071077, "G", "T")
         assert scores == _DEFAULT_SCORES
 
     def test_stub_mode_annotate_fills_all_columns(self, minimal_df):
-        from src.data.dbnsfp import (
+        from genomic_variant_classifier.data.dbnsfp import (
             DbNSFPConnector,
             DEFAULT_SIFT, DEFAULT_PP2, DEFAULT_REVEL,
             DEFAULT_CADD, DEFAULT_PHYLOP, DEFAULT_GERP,
@@ -626,7 +626,7 @@ class TestDbNSFPConnector:
         assert scores.gerp_score      == pytest.approx(5.1)
 
     def test_missing_variant_returns_defaults(self, connector):
-        from src.data.dbnsfp import _DEFAULT_SCORES
+        from genomic_variant_classifier.data.dbnsfp import _DEFAULT_SCORES
         scores = connector.get_scores("2", 999999, "A", "C")
         assert scores == _DEFAULT_SCORES
 
@@ -682,7 +682,7 @@ class TestDbNSFPConnector:
         assert result.loc[0, "gerp_score"]      == pytest.approx(5.1)
 
     def test_annotate_defaults_for_miss(self, connector, minimal_df):
-        from src.data.dbnsfp import DEFAULT_SIFT, DEFAULT_CADD, DEFAULT_GERP
+        from genomic_variant_classifier.data.dbnsfp import DEFAULT_SIFT, DEFAULT_CADD, DEFAULT_GERP
         result = connector.annotate_dataframe(minimal_df)
         # Row 3 = chr2:999999 A>C — not in synthetic index
         assert result.loc[3, "sift_score"]  == DEFAULT_SIFT
@@ -710,7 +710,7 @@ class TestDbNSFPConnector:
 
     def test_missing_value_override(self, connector):
         """annotate_dataframe must honour per-column default overrides."""
-        from src.data.dbnsfp import DbNSFPConnector
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector
         c = DbNSFPConnector(dbnsfp_file=None)   # stub — all variants missing
         df = pd.DataFrame({
             "chrom": ["2"], "pos": [999999], "ref": ["A"], "alt": ["C"],
@@ -724,7 +724,7 @@ class TestDbNSFPConnector:
     # ------------------------------------------------------------------
 
     def test_df_to_index_keys_normalised(self):
-        from src.data.dbnsfp import DbNSFPConnector
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector
         df = pd.DataFrame({
             "chrom":         ["chr17"],
             "pos":           [43071077],
@@ -741,7 +741,7 @@ class TestDbNSFPConnector:
         assert ("17", 43071077, "G", "T") in index
 
     def test_df_to_index_values_are_dbnsfp_scores(self):
-        from src.data.dbnsfp import DbNSFPConnector, DbNSFPScores
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector, DbNSFPScores
         df = pd.DataFrame({
             "chrom":         ["17"],
             "pos":           [43071077],
@@ -764,7 +764,7 @@ class TestDbNSFPConnector:
     # ------------------------------------------------------------------
 
     def test_file_based_annotation(self, tmp_path):
-        from src.data.dbnsfp import DbNSFPConnector, DEFAULT_GERP
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector, DEFAULT_GERP
         content = (
             "#chr\tpos(1-based)\tref\talt\t"
             "SIFT_score\tPolyphen2_HDIV_score\tREVEL_score\t"
@@ -794,7 +794,7 @@ class TestDbNSFPConnector:
 
     def test_missing_score_column_gracefully_defaults(self, tmp_path):
         """File missing GERP++_RS column must still annotate other scores."""
-        from src.data.dbnsfp import DbNSFPConnector, DEFAULT_GERP
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector, DEFAULT_GERP
         content = (
             "#chr\tpos(1-based)\tref\talt\t"
             "SIFT_score\tPolyphen2_HDIV_score\tREVEL_score\t"
@@ -814,7 +814,7 @@ class TestDbNSFPConnector:
         assert result.loc[0, "gerp_score"]  == DEFAULT_GERP   # graceful default
 
     def test_parquet_cache_written_and_reused(self, tmp_path):
-        from src.data.dbnsfp import DbNSFPConnector
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector
         content = (
             "#chr\tpos(1-based)\tref\talt\t"
             "SIFT_score\tPolyphen2_HDIV_score\tREVEL_score\t"
@@ -836,8 +836,8 @@ class TestDbNSFPConnector:
 
     def test_cache_filename_does_not_collide_with_connector6(self, tmp_path):
         """Connector 7 cache must not overwrite Connector 6 cache."""
-        from src.data.dbnsfp import DbNSFPConnector
-        from src.data.sift_polyphen import SIFTPolyPhenConnector
+        from genomic_variant_classifier.data.dbnsfp import DbNSFPConnector
+        from genomic_variant_classifier.data.sift_polyphen import SIFTPolyPhenConnector
         c6_cache = tmp_path / "dbnsfp_sift_pp2_index.parquet"
         c7_cache = tmp_path / "dbnsfp_clinvar_index.parquet"
         assert c6_cache != c7_cache
@@ -847,7 +847,7 @@ class TestDbNSFPConnector:
     # ------------------------------------------------------------------
 
     def test_all_scores_flow_into_feature_matrix(self, connector):
-        from src.models.variant_ensemble import engineer_features, TABULAR_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features, TABULAR_FEATURES
         df = pd.DataFrame({
             "chrom":       ["17"],
             "pos":         [43071077],
@@ -869,14 +869,14 @@ class TestDbNSFPConnector:
         assert feats.loc[0, "gerp_score"]      == pytest.approx(5.1)
 
     def test_gerp_score_in_tabular_features(self):
-        from src.models.variant_ensemble import TABULAR_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
         assert "gerp_score" in TABULAR_FEATURES
 
     def test_helpers_imported_from_connector6(self):
         """Connector 7 must import helpers from sift_polyphen, not redefine them."""
         import inspect
-        import src.data.dbnsfp as m
-        from src.data.sift_polyphen import _normalise_chrom, _parse_multival
+        import genomic_variant_classifier.data.dbnsfp as m
+        from genomic_variant_classifier.data.sift_polyphen import _normalise_chrom, _parse_multival
         assert m._normalise_chrom is _normalise_chrom
         assert m._parse_multival  is _parse_multival               
 
@@ -889,7 +889,7 @@ class TestETLNormalization:
 
     def test_chrom_map_completeness(self):
         pytest.importorskip("pyspark")
-        from src.data.spark_etl import CHROM_MAP
+        from genomic_variant_classifier.data.spark_etl import CHROM_MAP
         for i in range(1, 23):
             assert str(i) in CHROM_MAP, f"Missing bare chromosome {i}"
             assert f"chr{i}" in CHROM_MAP, f"Missing chr-prefixed chromosome {i}"
@@ -898,7 +898,7 @@ class TestETLNormalization:
 
     def test_chrom_normalization_values(self):
         pytest.importorskip("pyspark")
-        from src.data.spark_etl import CHROM_MAP
+        from genomic_variant_classifier.data.spark_etl import CHROM_MAP
         assert CHROM_MAP["chr1"] == "1"
         assert CHROM_MAP["chrX"] == "X"
         assert CHROM_MAP["chrM"] == "MT"
@@ -906,7 +906,7 @@ class TestETLNormalization:
 
     def test_schema_has_required_fields(self):
         pytest.importorskip("pyspark")
-        from src.data.spark_etl import VARIANT_SCHEMA
+        from genomic_variant_classifier.data.spark_etl import VARIANT_SCHEMA
         field_names = [f.name for f in VARIANT_SCHEMA]
         for required in ["variant_id", "chrom", "pos", "ref", "alt", "pathogenicity"]:
             assert required in field_names
@@ -917,25 +917,25 @@ class TestETLNormalization:
 # ---------------------------------------------------------------------------
 class TestFeatureEngineering:
     def test_engineer_features_shape(self, sample_canonical_df):
-        # CHANGE: import from src.models.variant_ensemble not src.models.ensemble
-        from src.models.variant_ensemble import engineer_features, TABULAR_FEATURES
+        # CHANGE: import from genomic_variant_classifier.models.variant_ensemble not src.models.ensemble
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features, TABULAR_FEATURES
         feats = engineer_features(sample_canonical_df)
         assert feats.shape[0] == len(sample_canonical_df)
         assert feats.shape[1] == len(TABULAR_FEATURES)
 
     def test_engineer_features_no_nans(self, sample_canonical_df):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         feats = engineer_features(sample_canonical_df)
         assert not feats.isnull().any().any(), "Feature matrix must have no NaNs"
 
     def test_is_snv_detection(self, sample_canonical_df):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         feats = engineer_features(sample_canonical_df)
         assert feats["is_snv"].sum() == len(sample_canonical_df)
         assert feats["is_indel"].sum() == 0
 
     def test_consequence_features(self, sample_canonical_df):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         feats = engineer_features(sample_canonical_df)
         # Row 0 = missense_variant
         assert feats.loc[0, "is_missense"] == 1
@@ -946,18 +946,18 @@ class TestFeatureEngineering:
 
     def test_codon_position_in_tabular_features(self):
         """codon_position was promoted to TABULAR_FEATURES in Phase 4 (VEP connector)."""
-        from src.models.variant_ensemble import TABULAR_FEATURES, PHASE_2_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, PHASE_2_FEATURES
         assert "codon_position" in TABULAR_FEATURES
         assert "codon_position" not in PHASE_2_FEATURES
 
     def test_encode_sequence_shape(self):
-        from src.models.variant_ensemble import encode_sequence
+        from genomic_variant_classifier.models.variant_ensemble import encode_sequence
         seq = "ACGT" * 25 + "A"  # 101 bp
         encoded = encode_sequence(seq, window=101)
         assert encoded.shape == (101, 4)
 
     def test_encode_sequence_one_hot_valid(self):
-        from src.models.variant_ensemble import encode_sequence
+        from genomic_variant_classifier.models.variant_ensemble import encode_sequence
         seq = "ACGT" * 25 + "A"
         encoded = encode_sequence(seq, window=101)
         # Every position should be a valid one-hot row summing to 1.0
@@ -966,7 +966,7 @@ class TestFeatureEngineering:
     def test_encode_sequence_no_k_parameter(self):
         """encode_sequence removed the unused k parameter (Bug 7)."""
         import inspect
-        from src.models.variant_ensemble import encode_sequence
+        from genomic_variant_classifier.models.variant_ensemble import encode_sequence
         sig = inspect.signature(encode_sequence)
         assert "k" not in sig.parameters, "k parameter should have been removed (Bug 7)"
 
@@ -982,14 +982,14 @@ class TestValidationMetrics:
         return y_true, y_proba
 
     def test_bootstrap_ci_bounds(self):
-        from src.reports.report_generator import bootstrap_metric
+        from genomic_variant_classifier.reports.report_generator import bootstrap_metric
         from sklearn.metrics import roc_auc_score
         y_true, y_proba = self._make_predictions()
         lo, hi = bootstrap_metric(y_true, y_proba, roc_auc_score, n_bootstrap=50)
         assert 0.0 <= lo <= hi <= 1.0
 
     def test_variant_phenotype_association_keys(self):
-        from src.reports.report_generator import compute_variant_phenotype_association
+        from genomic_variant_classifier.reports.report_generator import compute_variant_phenotype_association
         rng = np.random.default_rng(0)
         result = compute_variant_phenotype_association(
             rng.integers(0, 2, 100), rng.integers(0, 2, 100)
@@ -1000,7 +1000,7 @@ class TestValidationMetrics:
         assert 0.0 <= result["p_value"] <= 1.0
 
     def test_report_generation_creates_file(self, sample_canonical_df, tmp_path):
-        from src.reports.report_generator import ReportGenerator
+        from genomic_variant_classifier.reports.report_generator import ReportGenerator
         rng = np.random.default_rng(42)
         sample_canonical_df = sample_canonical_df.copy()
         sample_canonical_df["ensemble_score"] = rng.uniform(0, 1, len(sample_canonical_df))
@@ -1024,7 +1024,7 @@ class TestValidationMetrics:
 
     def test_report_format_int_filter(self, sample_canonical_df, tmp_path):
         """format_int filter (Environment fix, Issue O) must produce comma-formatted numbers."""
-        from src.reports.report_generator import ReportGenerator
+        from genomic_variant_classifier.reports.report_generator import ReportGenerator
         gen = ReportGenerator(output_dir=tmp_path)
         report_path = gen.generate(
             modality="dna",
@@ -1048,7 +1048,7 @@ class TestClinicalEvaluator:
         return y, p
 
     def test_evaluate_returns_report(self):
-        from src.evaluation.evaluator import ClinicalEvaluator, EvaluationReport
+        from genomic_variant_classifier.evaluation.evaluator import ClinicalEvaluator, EvaluationReport
         y, p = self._make_data()
         ev = ClinicalEvaluator(n_bootstrap=10)
         report = ev.evaluate(y, p, model_name="test_model")
@@ -1058,7 +1058,7 @@ class TestClinicalEvaluator:
 
     def test_gene_error_analysis_dict_unpack(self):
         """GeneErrorAnalysis must use to_dict(orient='records') not itertuples (Issue S)."""
-        from src.evaluation.evaluator import ClinicalEvaluator, GeneErrorAnalysis
+        from genomic_variant_classifier.evaluation.evaluator import ClinicalEvaluator, GeneErrorAnalysis
         rng = np.random.default_rng(0)
         n = 200
         y, p = self._make_data(n)
@@ -1070,7 +1070,7 @@ class TestClinicalEvaluator:
         assert all(isinstance(ge, GeneErrorAnalysis) for ge in gene_errors)
 
     def test_operating_points_present(self):
-        from src.evaluation.evaluator import ClinicalEvaluator
+        from genomic_variant_classifier.evaluation.evaluator import ClinicalEvaluator
         y, p = self._make_data()
         ev = ClinicalEvaluator(n_bootstrap=10)
         report = ev.evaluate(y, p)
@@ -1079,7 +1079,7 @@ class TestClinicalEvaluator:
         assert report.at_sensitivity_95 is not None
 
     def test_save_report(self, tmp_path):
-        from src.evaluation.evaluator import ClinicalEvaluator
+        from genomic_variant_classifier.evaluation.evaluator import ClinicalEvaluator
         y, p = self._make_data()
         ev = ClinicalEvaluator(n_bootstrap=10)
         report = ev.evaluate(y, p)
@@ -1095,7 +1095,7 @@ class TestClinicalEvaluator:
 # ---------------------------------------------------------------------------
 class TestEndToEndPipeline:
     def test_features_to_predictions_shape(self, sample_canonical_df, sample_labels):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         from sklearn.ensemble import RandomForestClassifier
 
         feats = engineer_features(sample_canonical_df)
@@ -1107,8 +1107,8 @@ class TestEndToEndPipeline:
 
     def test_full_report_pipeline(self, sample_canonical_df, sample_labels, tmp_path):
         """Smoke test: features → RF → report generation."""
-        from src.models.variant_ensemble import engineer_features
-        from src.reports.report_generator import ReportGenerator
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.reports.report_generator import ReportGenerator
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.metrics import roc_auc_score
 
@@ -1140,31 +1140,31 @@ class TestGTExConnector:
     # ── ID helpers ────────────────────────────────────────────────────────
  
     def test_gtex_variant_id_format(self):
-        from src.data.gtex import _gtex_variant_id
+        from genomic_variant_classifier.data.gtex import _gtex_variant_id
         assert _gtex_variant_id("17", 43071077, "G", "T") == "chr17_43071077_G_T_b38"
         assert _gtex_variant_id("X",  100000,   "A", "C") == "chrX_100000_A_C_b38"
         assert _gtex_variant_id("1",  925952,   "G", "A") == "chr1_925952_G_A_b38"
  
     def test_from_gtex_variant_id_valid(self):
-        from src.data.gtex import _from_gtex_variant_id
+        from genomic_variant_classifier.data.gtex import _from_gtex_variant_id
         result = _from_gtex_variant_id("chr17_43071077_G_T_b38")
         assert result == {"chrom": "17", "pos": 43071077, "ref": "G", "alt": "T"}
  
     def test_from_gtex_variant_id_x_chromosome(self):
-        from src.data.gtex import _from_gtex_variant_id
+        from genomic_variant_classifier.data.gtex import _from_gtex_variant_id
         result = _from_gtex_variant_id("chrX_100000_A_C_b38")
         assert result is not None
         assert result["chrom"] == "X"
  
     def test_from_gtex_variant_id_invalid_returns_none(self):
-        from src.data.gtex import _from_gtex_variant_id
+        from genomic_variant_classifier.data.gtex import _from_gtex_variant_id
         assert _from_gtex_variant_id("bad_format")            is None
         assert _from_gtex_variant_id("chr1_notanint_G_A_b38") is None
         assert _from_gtex_variant_id("1_925952_G_A_b38")      is None
         assert _from_gtex_variant_id("chr1_925952_G_A")        is None
  
     def test_variant_id_roundtrip(self):
-        from src.data.gtex import _gtex_variant_id, _from_gtex_variant_id
+        from genomic_variant_classifier.data.gtex import _gtex_variant_id, _from_gtex_variant_id
         gtex_id = _gtex_variant_id("17", 43071077, "G", "T")
         parsed  = _from_gtex_variant_id(gtex_id)
         assert parsed == {"chrom": "17", "pos": 43071077, "ref": "G", "alt": "T"}
@@ -1172,7 +1172,7 @@ class TestGTExConnector:
     # ── Expression summary ─────────────────────────────────────────────────
  
     def test_summarise_expression_basic(self):
-        from src.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.gtex import GTExConnector
         expr_df = pd.DataFrame({
             "tissueSiteDetailId": ["Whole_Blood", "Liver", "Lung"],
             "median": [10.0, 0.5, 5.0],
@@ -1185,7 +1185,7 @@ class TestGTExConnector:
         assert "Whole_Blood" in result["gtex_tissue_tpm"]
  
     def test_summarise_expression_ubiquitous(self):
-        from src.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.gtex import GTExConnector
         expr_df = pd.DataFrame({
             "tissueSiteDetailId": [f"T{i}" for i in range(10)],
             "median": [5.0] * 10,
@@ -1194,7 +1194,7 @@ class TestGTExConnector:
         assert result["gtex_tissue_specificity"] == 0.0
  
     def test_summarise_expression_all_zero(self):
-        from src.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.gtex import GTExConnector
         expr_df = pd.DataFrame({
             "tissueSiteDetailId": ["Whole_Blood"],
             "median": [0.0],
@@ -1205,7 +1205,7 @@ class TestGTExConnector:
         assert result["gtex_n_tissues_expressed"] == 0
  
     def test_empty_expression_row(self):
-        from src.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.gtex import GTExConnector
         result = GTExConnector._empty_expression_row("UNKNOWN")
         assert result["gene_symbol"]              == "UNKNOWN"
         assert result["gtex_max_tpm"]             == 0.0
@@ -1216,8 +1216,8 @@ class TestGTExConnector:
     # ── connector.fetch() — all HTTP mocked ───────────────────────────────
  
     def test_fetch_returns_canonical_schema(self):
-        from src.data.gtex import GTExConnector
-        from src.data.database_connectors import CANONICAL_COLUMNS
+        from genomic_variant_classifier.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.database_connectors import CANONICAL_COLUMNS
         connector = GTExConnector()
         connector._resolve_gencode_ids = MagicMock(
             return_value={"BRCA1": "ENSG00000012048.23"}
@@ -1242,8 +1242,8 @@ class TestGTExConnector:
         assert result.iloc[0]["gene_symbol"] == "BRCA1"
  
     def test_fetch_empty_gene_list(self):
-        from src.data.gtex import GTExConnector
-        from src.data.database_connectors import CANONICAL_COLUMNS
+        from genomic_variant_classifier.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.database_connectors import CANONICAL_COLUMNS
         connector = GTExConnector()
         result    = connector.fetch(gene_symbols=[])
         assert isinstance(result, pd.DataFrame)
@@ -1251,7 +1251,7 @@ class TestGTExConnector:
         assert set(CANONICAL_COLUMNS).issubset(set(result.columns))
  
     def test_fetch_populates_expression_summary(self):
-        from src.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.gtex import GTExConnector
         connector = GTExConnector()
         connector._resolve_gencode_ids = MagicMock(
             return_value={"TP53": "ENSG00000141510.16"}
@@ -1270,7 +1270,7 @@ class TestGTExConnector:
     # ── build_gtex_feature_df ──────────────────────────────────────────────
  
     def test_build_gtex_adds_six_columns(self):
-        from src.data.gtex import GTExConnector, build_gtex_feature_df
+        from genomic_variant_classifier.data.gtex import GTExConnector, build_gtex_feature_df
         connector = GTExConnector()
         connector.gene_expression_summary = pd.DataFrame(
             {"gtex_max_tpm": [10.0], "gtex_n_tissues_expressed": [5],
@@ -1286,7 +1286,7 @@ class TestGTExConnector:
         assert result.iloc[0]["gtex_max_tpm"] == 10.0
  
     def test_build_gtex_nan_safe(self):
-        from src.data.gtex import GTExConnector, build_gtex_feature_df
+        from genomic_variant_classifier.data.gtex import GTExConnector, build_gtex_feature_df
         connector = GTExConnector()
         connector.gene_expression_summary = pd.DataFrame(
             {"gtex_max_tpm": [5.0], "gtex_n_tissues_expressed": [3],
@@ -1303,7 +1303,7 @@ class TestGTExConnector:
     # ── Integration with variant_ensemble.py ──────────────────────────────
  
     def test_gtex_features_in_tabular_features(self):
-        from src.models.variant_ensemble import TABULAR_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
         gtex_feats = [
             "gtex_max_tpm", "gtex_n_tissues_expressed", "gtex_tissue_specificity",
             "gtex_is_eqtl", "gtex_min_eqtl_pval", "gtex_max_abs_effect",
@@ -1312,7 +1312,7 @@ class TestGTExConnector:
             assert feat in TABULAR_FEATURES, f"{feat} missing from TABULAR_FEATURES"
  
     def test_gtex_not_in_phase2_features(self):
-        from src.models.variant_ensemble import PHASE_2_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import PHASE_2_FEATURES
         gtex_feats = [
             "gtex_max_tpm", "gtex_n_tissues_expressed", "gtex_tissue_specificity",
             "gtex_is_eqtl", "gtex_min_eqtl_pval", "gtex_max_abs_effect",
@@ -1321,16 +1321,16 @@ class TestGTExConnector:
             assert feat not in PHASE_2_FEATURES, f"{feat} still in PHASE_2_FEATURES"
  
     def test_inherits_base_connector(self):
-        from src.data.gtex import GTExConnector
-        from src.data.database_connectors import BaseConnector
+        from genomic_variant_classifier.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.database_connectors import BaseConnector
         assert issubclass(GTExConnector, BaseConnector)
  
     def test_source_name(self):
-        from src.data.gtex import GTExConnector
+        from genomic_variant_classifier.data.gtex import GTExConnector
         assert GTExConnector.source_name == "gtex"
  
     def test_priority_tissues(self):
-        from src.data.gtex import PRIORITY_TISSUES
+        from genomic_variant_classifier.data.gtex import PRIORITY_TISSUES
         assert len(PRIORITY_TISSUES) == 7
         assert "Whole_Blood"     in PRIORITY_TISSUES
         assert "Brain_Cortex"    in PRIORITY_TISSUES
@@ -1346,18 +1346,18 @@ class TestSpliceAIConnector:
     # ── Identity ──────────────────────────────────────────────────────────
  
     def test_source_name(self):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         assert SpliceAIConnector.source_name == "spliceai"
  
     def test_inherits_base_connector(self):
-        from src.data.spliceai import SpliceAIConnector
-        from src.data.database_connectors import BaseConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.database_connectors import BaseConnector
         assert issubclass(SpliceAIConnector, BaseConnector)
  
     # ── parse_info_field ──────────────────────────────────────────────────
  
     def test_parse_info_field_single_gene(self):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         result = SpliceAIConnector.parse_info_field(
             "T|BRCA1|0.85|0.00|0.00|0.00|-22|11|5|-32"
         )
@@ -1367,7 +1367,7 @@ class TestSpliceAIConnector:
         assert result["symbol"]          == "BRCA1"
  
     def test_parse_info_field_takes_max_across_delta_scores(self):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         result = SpliceAIConnector.parse_info_field(
             "A|TP53|0.01|0.02|0.03|0.72|0|0|0|0"
         )
@@ -1375,7 +1375,7 @@ class TestSpliceAIConnector:
         assert result["ds_dl"]           == pytest.approx(0.72)
  
     def test_parse_info_field_multi_gene_takes_max(self):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         result = SpliceAIConnector.parse_info_field(
             "T|BRCA1|0.01|0.00|0.00|0.03|-22|11|5|-32,"
             "T|NBR1|0.00|0.00|0.45|0.00|1|-3|4|-2"
@@ -1384,19 +1384,19 @@ class TestSpliceAIConnector:
         assert result["symbol"]          == "NBR1"
  
     def test_parse_info_field_empty_returns_zero(self):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         assert SpliceAIConnector.parse_info_field("")["splice_ai_score"]    == 0.0
         assert SpliceAIConnector.parse_info_field("   ")["splice_ai_score"] == 0.0
  
     def test_parse_info_field_malformed_does_not_raise(self):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         result = SpliceAIConnector.parse_info_field("T|BRCA1|notafloat|0.0|0.0|0.0")
         assert result["splice_ai_score"] == 0.0
  
     # ── fetch() with no VCF file ──────────────────────────────────────────
  
     def test_fetch_no_vcf_path_returns_zero_scores(self):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         connector  = SpliceAIConnector(vcf_path=None)
         variant_df = pd.DataFrame({
             "variant_id": ["clinvar:17:43071077:G:T"],
@@ -1408,7 +1408,7 @@ class TestSpliceAIConnector:
         assert result["splice_ai_score"].iloc[0] == 0.0
  
     def test_fetch_missing_vcf_file_returns_zero_scores(self, tmp_path):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         connector  = SpliceAIConnector(vcf_path=tmp_path / "nonexistent.vcf.gz")
         variant_df = pd.DataFrame({
             "variant_id": ["clinvar:17:43071077:G:T"],
@@ -1419,7 +1419,7 @@ class TestSpliceAIConnector:
         assert result["splice_ai_score"].iloc[0] == 0.0
  
     def test_fetch_empty_dataframe_returns_empty(self):
-        from src.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
         connector = SpliceAIConnector(vcf_path=None)
         result    = connector.fetch(variant_df=pd.DataFrame())
         assert isinstance(result, pd.DataFrame)
@@ -1429,8 +1429,8 @@ class TestSpliceAIConnector:
  
     def test_fetch_with_mock_vcf_correct_scores(self, tmp_path):
         import gzip
-        from src.data.spliceai import SpliceAIConnector
-        from src.data.database_connectors import FetchConfig
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.database_connectors import FetchConfig
  
         vcf_lines = (
             "##fileformat=VCFv4.2\n"
@@ -1472,8 +1472,8 @@ class TestSpliceAIConnector:
  
     def test_fetch_unknown_variant_gets_zero(self, tmp_path):
         import gzip
-        from src.data.spliceai import SpliceAIConnector
-        from src.data.database_connectors import FetchConfig
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.database_connectors import FetchConfig
  
         vcf_lines = (
             "##fileformat=VCFv4.2\n"
@@ -1497,8 +1497,8 @@ class TestSpliceAIConnector:
  
     def test_parquet_cache_used_on_second_call(self, tmp_path):
         import gzip
-        from src.data.spliceai import SpliceAIConnector
-        from src.data.database_connectors import FetchConfig
+        from genomic_variant_classifier.data.spliceai import SpliceAIConnector
+        from genomic_variant_classifier.data.database_connectors import FetchConfig
  
         vcf_lines = (
             "##fileformat=VCFv4.2\n"
@@ -1529,12 +1529,12 @@ class TestSpliceAIConnector:
  
     def test_splice_ai_score_in_tabular_features(self):
         """Connector is live -- splice_ai_score promoted to TABULAR_FEATURES."""
-        from src.models.variant_ensemble import TABULAR_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
         assert "splice_ai_score" in TABULAR_FEATURES
 
     def test_splice_ai_score_not_in_phase2_features(self):
         """After promotion, splice_ai_score must no longer be in PHASE_2_FEATURES."""
-        from src.models.variant_ensemble import PHASE_2_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import PHASE_2_FEATURES
         assert "splice_ai_score" not in PHASE_2_FEATURES
 
 # ---------------------------------------------------------------------------
@@ -1544,23 +1544,23 @@ class TestCADDConnector:
     """Unit tests for CADDConnector. All HTTP calls are mocked."""
 
     def test_source_name(self):
-        from src.data.cadd import CADDConnector
+        from genomic_variant_classifier.data.cadd import CADDConnector
         assert CADDConnector.source_name == "cadd"
 
     def test_inherits_base_connector(self):
-        from src.data.cadd import CADDConnector
-        from src.data.database_connectors import BaseConnector
+        from genomic_variant_classifier.data.cadd import CADDConnector
+        from genomic_variant_classifier.data.database_connectors import BaseConnector
         assert issubclass(CADDConnector, BaseConnector)
 
     def test_rate_delay_enforced(self):
-        from src.data.cadd import CADDConnector, CADD_RATE_DELAY
-        from src.data.database_connectors import FetchConfig
+        from genomic_variant_classifier.data.cadd import CADDConnector, CADD_RATE_DELAY
+        from genomic_variant_classifier.data.database_connectors import FetchConfig
         config    = FetchConfig(rate_limit_delay=0.1)
         connector = CADDConnector(config=config)
         assert connector.config.rate_limit_delay >= CADD_RATE_DELAY
 
     def test_parse_response_valid(self):
-        from src.data.cadd import CADDConnector
+        from genomic_variant_classifier.data.cadd import CADDConnector
         data   = [{"Chrom": "17", "Pos": "43071077",
                    "Ref": "G", "Alt": "T",
                    "RawScore": "2.345", "PHRED": "23.4"}]
@@ -1568,7 +1568,7 @@ class TestCADDConnector:
         assert result == pytest.approx(23.4)
 
     def test_parse_response_low_score(self):
-        from src.data.cadd import CADDConnector
+        from genomic_variant_classifier.data.cadd import CADDConnector
         data   = [{"Chrom": "1", "Pos": "925952",
                    "Ref": "G", "Alt": "A",
                    "RawScore": "-0.5", "PHRED": "1.2"}]
@@ -1576,34 +1576,34 @@ class TestCADDConnector:
         assert result == pytest.approx(1.2)
 
     def test_parse_response_empty_list_returns_median(self):
-        from src.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
+        from genomic_variant_classifier.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
         assert CADDConnector.parse_response([]) == CADD_MEDIAN_PHRED
 
     def test_parse_response_none_returns_median(self):
-        from src.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
+        from genomic_variant_classifier.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
         assert CADDConnector.parse_response(None) == CADD_MEDIAN_PHRED
 
     def test_parse_response_missing_phred_returns_median(self):
-        from src.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
+        from genomic_variant_classifier.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
         data   = [{"Chrom": "1", "Pos": "925952",
                    "Ref": "G", "Alt": "A", "RawScore": "-0.5"}]
         assert CADDConnector.parse_response(data) == CADD_MEDIAN_PHRED
 
     def test_parse_response_non_numeric_phred_returns_median(self):
-        from src.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
+        from genomic_variant_classifier.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
         data   = [{"Chrom": "1", "Pos": "925952",
                    "Ref": "G", "Alt": "A", "PHRED": "not_a_number"}]
         assert CADDConnector.parse_response(data) == CADD_MEDIAN_PHRED
 
     def test_fetch_empty_dataframe_returns_empty(self):
-        from src.data.cadd import CADDConnector
+        from genomic_variant_classifier.data.cadd import CADDConnector
         connector = CADDConnector()
         result    = connector.fetch(variant_df=pd.DataFrame())
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
 
     def test_fetch_adds_cadd_phred_column(self):
-        from src.data.cadd import CADDConnector
+        from genomic_variant_classifier.data.cadd import CADDConnector
         connector = CADDConnector()
         connector._fetch_one = MagicMock(return_value=23.4)
         variant_df = pd.DataFrame({
@@ -1616,7 +1616,7 @@ class TestCADDConnector:
         assert result.iloc[0]["cadd_phred"] == pytest.approx(23.4)
 
     def test_fetch_multiple_variants(self):
-        from src.data.cadd import CADDConnector
+        from genomic_variant_classifier.data.cadd import CADDConnector
         connector = CADDConnector()
         expected  = {
             "17:43071077_G_T": 23.4,
@@ -1645,7 +1645,7 @@ class TestCADDConnector:
         assert scores["clinvar:1:925952:G:A"]    == pytest.approx(3.5)
 
     def test_fetch_api_failure_returns_median(self):
-        from src.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
+        from genomic_variant_classifier.data.cadd import CADDConnector, CADD_MEDIAN_PHRED
         connector = CADDConnector()
         connector._fetch_one = MagicMock(return_value=CADD_MEDIAN_PHRED)
         variant_df = pd.DataFrame({
@@ -1657,7 +1657,7 @@ class TestCADDConnector:
         assert result["cadd_phred"].iloc[0] == CADD_MEDIAN_PHRED
 
     def test_fetch_no_lookup_key_in_result(self):
-        from src.data.cadd import CADDConnector
+        from genomic_variant_classifier.data.cadd import CADDConnector
         connector = CADDConnector()
         connector._fetch_one = MagicMock(return_value=10.0)
         variant_df = pd.DataFrame({
@@ -1669,7 +1669,7 @@ class TestCADDConnector:
         assert "_lookup_key" not in result.columns
 
     def test_cadd_phred_used_by_engineer_features_when_present(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame({
             "variant_id":  ["clinvar:17:43071077:G:T"],
             "source_db":   ["clinvar"],
@@ -1685,7 +1685,7 @@ class TestCADDConnector:
         assert feats.iloc[0]["cadd_phred"] == pytest.approx(35.0)
 
     def test_cadd_phred_uses_median_when_absent(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame({
             "variant_id":  ["clinvar:1:925952:G:A"],
             "source_db":   ["clinvar"],
@@ -1700,7 +1700,7 @@ class TestCADDConnector:
         assert feats.iloc[0]["cadd_phred"] == pytest.approx(15.0)
 
     def test_cadd_phred_in_tabular_features(self):
-        from src.models.variant_ensemble import TABULAR_FEATURES, PHASE_2_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, PHASE_2_FEATURES
         assert "cadd_phred" in TABULAR_FEATURES
         assert "cadd_phred" not in PHASE_2_FEATURES
  
@@ -1725,7 +1725,7 @@ class TestREVELConnector:
  
         rows: list of (chrom, pos, ref, alt, score) tuples — no file needed.
         """
-        from src.data.revel import REVELConnector
+        from genomic_variant_classifier.data.revel import REVELConnector
         conn = REVELConnector(revel_file=None)
         conn._index = {
             (str(chrom), int(pos), ref.upper(), alt.upper()): float(score)
@@ -1757,7 +1757,7 @@ class TestREVELConnector:
  
     def test_missing_variant_returns_default(self):
         """A variant absent from the index returns DEFAULT_SCORE."""
-        from src.data.revel import DEFAULT_SCORE
+        from genomic_variant_classifier.data.revel import DEFAULT_SCORE
         conn = self._make_connector([])
         score = conn.get_score("1", 100, "A", "C")
         assert score == DEFAULT_SCORE
@@ -1827,7 +1827,7 @@ class TestREVELConnector:
  
     def test_annotate_default_for_miss(self):
         """Unmatched variant gets DEFAULT_SCORE."""
-        from src.data.revel import DEFAULT_SCORE
+        from genomic_variant_classifier.data.revel import DEFAULT_SCORE
         conn = self._make_connector([])
         df = self._canonical_df()
         result = conn.annotate_dataframe(df)
@@ -1835,7 +1835,7 @@ class TestREVELConnector:
  
     def test_annotate_mixed_hits_and_misses(self):
         """Per-row resolution — one hit, one miss in the same DataFrame."""
-        from src.data.revel import DEFAULT_SCORE
+        from genomic_variant_classifier.data.revel import DEFAULT_SCORE
         conn = self._make_connector([("17", 43071077, "G", "T", 0.90)])
         df = pd.DataFrame({
             "chrom": ["17", "1"],
@@ -1893,7 +1893,7 @@ class TestREVELConnector:
     # ------------------------------------------------------------------
     def test_stub_mode_returns_default_without_crash(self):
         """REVELConnector(None) must not raise — it returns DEFAULT_SCORE."""
-        from src.data.revel import REVELConnector, DEFAULT_SCORE
+        from genomic_variant_classifier.data.revel import REVELConnector, DEFAULT_SCORE
         conn = REVELConnector(revel_file=None)
         # Force-inject empty index so _load_index (file I/O) is not called.
         conn._index = {}
@@ -1905,7 +1905,7 @@ class TestREVELConnector:
     # ------------------------------------------------------------------
     def test_df_to_index_keys_are_normalised(self):
         """_df_to_index must normalise chromosome and upper-case alleles."""
-        from src.data.revel import REVELConnector
+        from genomic_variant_classifier.data.revel import REVELConnector
         df = pd.DataFrame({
             "chrom":       ["chr1", "chrX"],
             "pos":         [100,    200],
@@ -1918,7 +1918,7 @@ class TestREVELConnector:
         assert ("X", 200, "G", "T") in index
  
     def test_df_to_index_values_are_float(self):
-        from src.data.revel import REVELConnector
+        from genomic_variant_classifier.data.revel import REVELConnector
         df = pd.DataFrame({
             "chrom": ["1"], "pos": [100],
             "ref": ["A"], "alt": ["C"],
@@ -1937,8 +1937,8 @@ class TestREVELConnector:
         After annotation, engineer_features must use the real revel_score
         rather than the 0.5 median fill-in default.
         """
-        from src.data.revel import REVELConnector, _normalise_chrom
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.data.revel import REVELConnector, _normalise_chrom
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
 
         conn = REVELConnector(revel_file=None)
         conn._index = {
@@ -1980,7 +1980,7 @@ class TestPhyloPConnector:
 
         rows: list of (chrom, pos, score) tuples — no file needed.
         """
-        from src.data.phylop import PhyloPConnector
+        from genomic_variant_classifier.data.phylop import PhyloPConnector
         conn = PhyloPConnector(phylop_file=None)
         conn._index = {
             (str(chrom), int(pos)): float(score)
@@ -2012,7 +2012,7 @@ class TestPhyloPConnector:
 
     def test_missing_position_returns_default(self):
         """A position absent from the index returns DEFAULT_SCORE."""
-        from src.data.phylop import DEFAULT_SCORE
+        from genomic_variant_classifier.data.phylop import DEFAULT_SCORE
         conn = self._make_connector([])
         assert conn.get_score("1", 100) == DEFAULT_SCORE
 
@@ -2077,7 +2077,7 @@ class TestPhyloPConnector:
 
     def test_annotate_default_for_miss(self):
         """Unmatched position gets DEFAULT_SCORE."""
-        from src.data.phylop import DEFAULT_SCORE
+        from genomic_variant_classifier.data.phylop import DEFAULT_SCORE
         conn = self._make_connector([])
         df = self._canonical_df()
         result = conn.annotate_dataframe(df)
@@ -2085,7 +2085,7 @@ class TestPhyloPConnector:
 
     def test_annotate_mixed_hits_and_misses(self):
         """Per-row resolution — one hit, one miss in the same DataFrame."""
-        from src.data.phylop import DEFAULT_SCORE
+        from genomic_variant_classifier.data.phylop import DEFAULT_SCORE
         conn = self._make_connector([("17", 43071077, 4.5)])
         df = pd.DataFrame({
             "chrom": ["17", "1"],
@@ -2123,14 +2123,14 @@ class TestPhyloPConnector:
     # ------------------------------------------------------------------
     def test_stub_mode_returns_default_without_crash(self):
         """PhyloPConnector(None) must not raise — returns DEFAULT_SCORE."""
-        from src.data.phylop import PhyloPConnector, DEFAULT_SCORE
+        from genomic_variant_classifier.data.phylop import PhyloPConnector, DEFAULT_SCORE
         conn = PhyloPConnector(phylop_file=None)
         conn._index = {}
         assert conn.get_score("1", 100) == DEFAULT_SCORE
 
     def test_stub_mode_annotate_dataframe(self):
         """annotate_dataframe in stub mode fills every row with DEFAULT_SCORE."""
-        from src.data.phylop import PhyloPConnector, DEFAULT_SCORE
+        from genomic_variant_classifier.data.phylop import PhyloPConnector, DEFAULT_SCORE
         conn = PhyloPConnector(phylop_file=None)
         conn._index = {}
         df = pd.DataFrame({"chrom": ["1", "17"], "pos": [100, 43071077]})
@@ -2145,8 +2145,8 @@ class TestPhyloPConnector:
         After annotation, engineer_features must use the real phylop_score
         rather than the 0.0 neutral fill-in default.
         """
-        from src.data.phylop import PhyloPConnector, _normalise_chrom
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.data.phylop import PhyloPConnector, _normalise_chrom
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
 
         conn = PhyloPConnector(phylop_file=None)
         conn._index = {
@@ -2175,8 +2175,8 @@ class TestAnnotationPipeline:
         so the stub-zero code path is exercised regardless of on-disk
         state. Individual tests remain free to override these.
         """
-        from src.data import spliceai as _spliceai_mod
-        from src.data.database_connectors import BaseConnector
+        from genomic_variant_classifier.data import spliceai as _spliceai_mod
+        from genomic_variant_classifier.data.database_connectors import BaseConnector
         monkeypatch.setattr(
             _spliceai_mod, "DEFAULT_SPLICEAI_PATH", tmp_path / "nonexistent.parquet"
         )
@@ -2206,7 +2206,7 @@ class TestAnnotationPipeline:
         })
 
     def test_annotation_config_imports(self):
-        from src.data.real_data_prep import AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import AnnotationConfig
         cfg = AnnotationConfig()
         assert cfg.dbnsfp_path   is None
         assert cfg.phylop_path   is None
@@ -2214,7 +2214,7 @@ class TestAnnotationPipeline:
         assert cfg.annotate_cadd is False
 
     def test_annotation_config_all_none_is_default(self):
-        from src.data.real_data_prep import AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import AnnotationConfig
         cfg = AnnotationConfig()
         assert all(
             getattr(cfg, f) is None
@@ -2222,8 +2222,8 @@ class TestAnnotationPipeline:
         )
 
     def test_sift_defaults_consistent_across_modules(self):
-        from src.data.sift_polyphen import DEFAULT_SIFT
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.data.sift_polyphen import DEFAULT_SIFT
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame({
             "chrom": ["1"], "pos": [100], "ref": ["A"], "alt": ["T"],
             "consequence": ["intron_variant"], "allele_freq": [0.01],
@@ -2238,13 +2238,13 @@ class TestAnnotationPipeline:
         assert '"sift_score":             0.05,' not in src
 
     def test_annotate_scores_stub_mode_no_raise(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
         result = pipeline._annotate_scores(minimal_canonical_df)
         assert result is not minimal_canonical_df
 
     def test_annotate_scores_adds_all_score_columns(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
         result = pipeline._annotate_scores(minimal_canonical_df)
         for col in ["sift_score", "polyphen2_score", "revel_score",
@@ -2252,15 +2252,15 @@ class TestAnnotationPipeline:
             assert col in result.columns, f"Missing: {col}"
 
     def test_annotate_scores_adds_splice_ai_column(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
         result = pipeline._annotate_scores(minimal_canonical_df)
         assert "splice_ai_score" in result.columns
 
     def test_annotate_scores_stub_values_are_defaults(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
-        from src.data.dbnsfp import DEFAULT_SIFT, DEFAULT_PP2, DEFAULT_REVEL
-        from src.data.dbnsfp import DEFAULT_CADD, DEFAULT_GERP
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.dbnsfp import DEFAULT_SIFT, DEFAULT_PP2, DEFAULT_REVEL
+        from genomic_variant_classifier.data.dbnsfp import DEFAULT_CADD, DEFAULT_GERP
         pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
         result = pipeline._annotate_scores(minimal_canonical_df)
         assert (result["sift_score"]      == DEFAULT_SIFT).all()
@@ -2271,7 +2271,7 @@ class TestAnnotationPipeline:
         assert (result["splice_ai_score"] == 0.0).all()
 
     def test_annotate_scores_no_nans(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
         result = pipeline._annotate_scores(minimal_canonical_df)
         for col in ["sift_score", "polyphen2_score", "revel_score",
@@ -2279,29 +2279,29 @@ class TestAnnotationPipeline:
             assert not result[col].isna().any(), f"NaN in {col}"
 
     def test_annotate_scores_preserves_input_columns(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
         result = pipeline._annotate_scores(minimal_canonical_df)
         for col in minimal_canonical_df.columns:
             assert col in result.columns
 
     def test_cadd_skipped_when_annotate_cadd_false(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         from unittest.mock import patch
         pipeline = DataPrepPipeline(
             annotation_config=AnnotationConfig(annotate_cadd=False)
         )
-        with patch("src.data.cadd.CADDConnector.fetch") as mock_fetch:
+        with patch("genomic_variant_classifier.data.cadd.CADDConnector.fetch") as mock_fetch:
             pipeline._annotate_scores(minimal_canonical_df)
             mock_fetch.assert_not_called()
 
     def test_cadd_called_when_annotate_cadd_true(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         from unittest.mock import patch, MagicMock
         pipeline = DataPrepPipeline(
             annotation_config=AnnotationConfig(annotate_cadd=True)
         )
-        with patch("src.data.real_data_prep.CADDConnector") as MockCADD:
+        with patch("genomic_variant_classifier.data.real_data_prep.CADDConnector") as MockCADD:
             mock_instance = MagicMock()
             mock_instance.fetch.return_value = minimal_canonical_df.copy()
             MockCADD.return_value = mock_instance
@@ -2309,8 +2309,8 @@ class TestAnnotationPipeline:
             mock_instance.fetch.assert_called_once()
 
     def test_real_scores_flow_through_to_features(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
-        from src.models.variant_ensemble import engineer_features, TABULAR_FEATURES
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features, TABULAR_FEATURES
         from unittest.mock import patch
 
         pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
@@ -2325,7 +2325,7 @@ class TestAnnotationPipeline:
             out["gerp_score"]      = [5.1,  0.0]
             return out
 
-        with patch("src.data.real_data_prep.DbNSFPConnector") as MockDB:
+        with patch("genomic_variant_classifier.data.real_data_prep.DbNSFPConnector") as MockDB:
             MockDB.return_value.annotate_dataframe.side_effect = fake_annotate
             annotated = pipeline._annotate_scores(minimal_canonical_df)
 
@@ -2335,14 +2335,14 @@ class TestAnnotationPipeline:
         assert feats.loc[0, "gerp_score"]  == pytest.approx(5.1)
 
     def test_annotation_sequence_dbnsfp_before_phylop(self, minimal_canonical_df):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         from unittest.mock import patch
 
         call_order = []
         pipeline = DataPrepPipeline(annotation_config=AnnotationConfig())
 
-        with patch("src.data.real_data_prep.DbNSFPConnector") as MockDB, \
-             patch("src.data.real_data_prep.PhyloPConnector") as MockPP:
+        with patch("genomic_variant_classifier.data.real_data_prep.DbNSFPConnector") as MockDB, \
+             patch("genomic_variant_classifier.data.real_data_prep.PhyloPConnector") as MockPP:
             def db_side(df, **kw):
                 call_order.append("dbnsfp")
                 return df.copy()
@@ -2356,13 +2356,13 @@ class TestAnnotationPipeline:
         assert call_order.index("dbnsfp") < call_order.index("phylop")
 
     def test_pipeline_accepts_annotation_config(self):
-        from src.data.real_data_prep import DataPrepPipeline, AnnotationConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, AnnotationConfig
         cfg = AnnotationConfig(annotate_cadd=True)
         pipeline = DataPrepPipeline(annotation_config=cfg)
         assert pipeline.annotation_config.annotate_cadd is True
 
     def test_pipeline_default_annotation_config_is_stub(self):
-        from src.data.real_data_prep import DataPrepPipeline
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline
         pipeline = DataPrepPipeline()
         assert pipeline.annotation_config.dbnsfp_path   is None
         assert pipeline.annotation_config.annotate_cadd is False

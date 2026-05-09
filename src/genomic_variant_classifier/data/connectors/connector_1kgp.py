@@ -43,7 +43,7 @@ by definition.
 
 Usage
 -----
-    from src.data.connectors.connector_1kgp import KGPConnector
+    from genomic_variant_classifier.data.connectors.connector_1kgp import KGPConnector
 
     connector = KGPConnector(vcf_path="data/external/1kgp/1kGP_high_coverage_Illumina.sites.vcf.gz")
     df_annotated = connector.annotate(variant_df)

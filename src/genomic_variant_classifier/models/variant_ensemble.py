@@ -76,7 +76,7 @@ def _parse_codon_position(hgvsp: object) -> int:
 logger = logging.getLogger(__name__)
 
 try:
-    from src.models.catboost_wrapper import CatBoostVariantClassifier as _CatBoostVC
+    from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier as _CatBoostVC
 
     _CATBOOST_AVAILABLE = True
 except ImportError:
@@ -84,7 +84,7 @@ except ImportError:
     logger.debug("catboost not installed -- catboost base model will be skipped.")
 
 try:
-    from src.models.kan import KANClassifier as _KANClassifier
+    from genomic_variant_classifier.models.kan import KANClassifier as _KANClassifier
 
     _KAN_AVAILABLE = True
 except ImportError:
@@ -92,8 +92,8 @@ except ImportError:
     logger.debug("pykan not installed -- kan base model will be skipped.")
 
 try:
-    from src.models.mc_dropout import MCDropoutWrapper as _MCDropoutWrapper
-    from src.models.mc_dropout import DeepEnsembleWrapper as _DeepEnsembleWrapper
+    from genomic_variant_classifier.models.mc_dropout import MCDropoutWrapper as _MCDropoutWrapper
+    from genomic_variant_classifier.models.mc_dropout import DeepEnsembleWrapper as _DeepEnsembleWrapper
 
     _MC_DROPOUT_AVAILABLE = True
 except ImportError:

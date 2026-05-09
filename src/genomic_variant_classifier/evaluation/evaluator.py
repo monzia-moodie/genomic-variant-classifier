@@ -22,7 +22,7 @@ CHANGES FROM PHASE 1:
   - from __future__ import annotations added (Issue N).
 
 Usage:
-    from src.evaluation.evaluator import ClinicalEvaluator
+    from genomic_variant_classifier.evaluation.evaluator import ClinicalEvaluator
 
     evaluator = ClinicalEvaluator()
     report = evaluator.evaluate(

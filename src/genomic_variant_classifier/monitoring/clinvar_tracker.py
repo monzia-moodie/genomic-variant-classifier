@@ -24,7 +24,7 @@ This module:
   6. Exports a reclassification manifest for audit trail
 
 Usage:
-    from src.monitoring.clinvar_tracker import ClinVarTracker
+    from genomic_variant_classifier.monitoring.clinvar_tracker import ClinVarTracker
 
     tracker = ClinVarTracker(training_variant_ids=set(X_train_ids))
     result = tracker.compare(

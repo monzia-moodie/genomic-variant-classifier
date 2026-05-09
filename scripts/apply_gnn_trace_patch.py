@@ -45,9 +45,9 @@ INSERTIONS: list[tuple[str, str]] = [
         '                logger.info("[GNN-TRACE] gate-passed: entering GNN block")\n'
         '                logger.info("[GNN-TRACE] importing src.models.gnn ...")\n',
     ),
-    # 3. after the 'from src.models.gnn import (...)' block
+    # 3. after the 'from genomic_variant_classifier.models.gnn import (...)' block
     (
-        "                from src.models.gnn import (\n"
+        "                from genomic_variant_classifier.models.gnn import (\n"
         "                    GNNScorer,\n"
         "                    StringDBGraph,\n"
         "                    build_pyg_dataset,\n"

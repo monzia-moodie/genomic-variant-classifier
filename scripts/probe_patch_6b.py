@@ -18,7 +18,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.real_data_prep import DataPrepPipeline, DataPrepConfig
+from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, DataPrepConfig
 
 probe_out = Path("outputs/probe_patch6b")
 probe_out.mkdir(parents=True, exist_ok=True)

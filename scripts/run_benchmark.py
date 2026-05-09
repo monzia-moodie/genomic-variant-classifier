@@ -113,14 +113,14 @@ def _build_models():
     ])
 
     try:
-        from src.models.kan import KANClassifier
+        from genomic_variant_classifier.models.kan import KANClassifier
         models["KAN"] = KANClassifier(hidden_sizes=[64, 32], max_iter=200, random_state=42)
     except Exception:
         pass
 
     try:
         import lightgbm as lgb
-        from src.models.mc_dropout import DeepEnsembleWrapper
+        from genomic_variant_classifier.models.mc_dropout import DeepEnsembleWrapper
         models["DeepEnsemble-LGB"] = DeepEnsembleWrapper(
             base_estimator=lgb.LGBMClassifier(
                 n_estimators=300, learning_rate=0.05,
@@ -190,7 +190,7 @@ def main() -> None:
     X_val   = pd.read_parquet(args.splits_dir / "X_val.parquet")
     y_val   = pd.read_parquet(args.splits_dir / "y_val.parquet").squeeze()
 
-    from src.models.variant_ensemble import TABULAR_FEATURES
+    from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
     feat_cols = [c for c in TABULAR_FEATURES if c in X_train.columns]
     missing   = [c for c in TABULAR_FEATURES if c not in X_train.columns]
     if missing:

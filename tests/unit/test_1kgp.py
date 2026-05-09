@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.data.connectors.connector_1kgp import (
+from genomic_variant_classifier.data.connectors.connector_1kgp import (
     KGPConnector,
     KGPScores,
     MISSING_AF_DEFAULT,
@@ -316,7 +316,7 @@ def test_parquet_cache_written_and_reused(synthetic_vcf_gz: Path, tmp_path: Path
     # Second connector instance — should load from cache, not re-parse VCF
     c2 = KGPConnector(vcf_path=synthetic_vcf_gz, cache_dir=tmp_path)
     with patch.object(
-        __import__("src.data.connectors.connector_1kgp", fromlist=["_parse_vcf"]),
+        __import__("genomic_variant_classifier.data.connectors.connector_1kgp", fromlist=["_parse_vcf"]),
         "_parse_vcf",
         side_effect=AssertionError("VCF should not be re-parsed when cache exists"),
     ):
@@ -393,7 +393,7 @@ def test_population_cols_in_tabular_features() -> None:
     This test will FAIL until the features are added to src/api/schemas.py —
     which is the intended behaviour (test-driven integration).
     """
-    from src.models.variant_ensemble import TABULAR_FEATURES
+    from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
     for col in KGPConnector.POPULATION_COLS:
         assert col in TABULAR_FEATURES, (
             f"{col} is missing from TABULAR_FEATURES in src/api/schemas.py. "

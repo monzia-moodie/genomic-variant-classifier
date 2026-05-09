@@ -132,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Load ---
     logger.info("Loading pipeline from %s …", args.pipeline)
-    from src.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
     pipeline = InferencePipeline.load(args.pipeline)
 
     logger.info("Loading validation split from %s …", args.val_parquet)

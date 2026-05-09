@@ -30,7 +30,7 @@ The first run takes 5-15 minutes depending on dataset size and CPU count.
 
 CHANGES FROM PHASE 1:
   - Was a bare string literal (Bug 3 fixed -- now a real executable script).
-  - Imported VariantEnsemble from src.models.ensemble but that module only
+  - Imported VariantEnsemble from genomic_variant_classifier.models.ensemble but that module only
     exports EnsembleClassifier. VariantEnsemble is in variant_ensemble.py
     (Bug 5 fixed).
   - logging.basicConfig is now called only here, before any other imports
@@ -169,7 +169,7 @@ def main() -> None:
     # -- 1. Data preparation ------------------------------------------------
     logger.info("PHASE 1: Data Preparation")
 
-    from src.data.real_data_prep import (
+    from genomic_variant_classifier.data.real_data_prep import (
         AnnotationConfig,
         DataPrepConfig,
         DataPrepPipeline,
@@ -232,7 +232,7 @@ def main() -> None:
     # -- 2. Build and configure ensemble ------------------------------------
     logger.info("PHASE 2: Model Configuration")
 
-    from src.models.variant_ensemble import EnsembleConfig, VariantEnsemble
+    from genomic_variant_classifier.models.variant_ensemble import EnsembleConfig, VariantEnsemble
 
     ensemble_config = EnsembleConfig(
         n_folds=args.n_folds,
@@ -280,7 +280,7 @@ def main() -> None:
     metrics_df = ensemble.evaluate(X_test, X_seq_test, y_test)
     logger.info("\n%s", metrics_df.to_string())
 
-    from src.evaluation.evaluator import ClinicalEvaluator
+    from genomic_variant_classifier.evaluation.evaluator import ClinicalEvaluator
     evaluator = ClinicalEvaluator()
     ensemble_proba = ensemble.predict_proba(X_test, X_seq_test)[:, 1]
     eval_report = evaluator.evaluate(
@@ -313,7 +313,7 @@ def main() -> None:
         (k for k in ensemble.trained_models_ if "catboost" in k.lower()), None
     )
     if _cb_key is not None:
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         _cb_wrapper = ensemble.trained_models_[_cb_key]
         if isinstance(_cb_wrapper, CatBoostVariantClassifier):
             _cbm_path = out_dir / "catboost_model.cbm"

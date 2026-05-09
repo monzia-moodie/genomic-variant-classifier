@@ -29,7 +29,7 @@ Chosen to match the parameter count of the MLP fallback for fair comparison.
 
 Usage
 -----
-    from src.models.kan import KANClassifier
+    from genomic_variant_classifier.models.kan import KANClassifier
 
     clf = KANClassifier(hidden_sizes=[64, 32], max_iter=200)
     clf.fit(X_train, y_train)

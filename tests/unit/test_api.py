@@ -86,7 +86,7 @@ def _make_mock_meta_learner(proba: float = 0.85):
 
 
 def _make_pipeline(proba: float = 0.85):
-    from src.api.pipeline import InferencePipeline, PipelineMetadata
+    from genomic_variant_classifier.api.pipeline import InferencePipeline, PipelineMetadata
     return InferencePipeline(
         trained_models = _make_mock_trained_models(proba),
         meta_learner   = _make_mock_meta_learner(proba),
@@ -107,40 +107,40 @@ def _make_pipeline(proba: float = 0.85):
 class TestVariantRequestSchema:
 
     def test_minimal_valid_input(self):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(chrom="17", pos=43094692, ref="G", alt="A")
         assert v.chrom == "17"
         assert v.ref   == "G"
 
     def test_chr_prefix_stripped(self):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(chrom="chr17", pos=1, ref="A", alt="T")
         assert v.chrom == "17"
 
     def test_chrM_normalised_to_MT(self):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(chrom="chrM", pos=1, ref="A", alt="G")
         assert v.chrom == "MT"
 
     def test_M_normalised_to_MT(self):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(chrom="M", pos=1, ref="A", alt="G")
         assert v.chrom == "MT"
 
     def test_alleles_uppercased(self):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(chrom="1", pos=100, ref="aac", alt="a")
         assert v.ref == "AAC"
         assert v.alt == "A"
 
     def test_pos_must_be_positive(self):
         from pydantic import ValidationError
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         with pytest.raises(ValidationError):
             VariantRequest(chrom="1", pos=0, ref="A", alt="T")
 
     def test_optional_scores_default_none(self):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(chrom="1", pos=1, ref="A", alt="T")
         assert v.alphamissense_score is None
         assert v.allele_freq is None
@@ -149,31 +149,31 @@ class TestVariantRequestSchema:
 
     def test_allele_freq_bounds(self):
         from pydantic import ValidationError
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         with pytest.raises(ValidationError):
             VariantRequest(chrom="1", pos=1, ref="A", alt="T", allele_freq=1.5)
 
     def test_variant_id_derived(self):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(chrom="17", pos=43094692, ref="G", alt="A")
         assert v._variant_id == "17:43094692:G:A"
 
     def test_batch_input_min_one(self):
         from pydantic import ValidationError
-        from src.api.schemas import BatchPredictRequest
+        from genomic_variant_classifier.api.schemas import BatchPredictRequest
         with pytest.raises(ValidationError):
             BatchPredictRequest(variants=[])
 
     def test_batch_input_max_size(self):
         from pydantic import ValidationError
-        from src.api.schemas import BatchPredictRequest, MAX_BATCH_SIZE
+        from genomic_variant_classifier.api.schemas import BatchPredictRequest, MAX_BATCH_SIZE
         variants = [{"chrom": "1", "pos": i + 1, "ref": "A", "alt": "T"}
                     for i in range(MAX_BATCH_SIZE + 1)]
         with pytest.raises(ValidationError):
             BatchPredictRequest(variants=variants)
 
     def test_model_dump_roundtrip(self):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(
             chrom="17", pos=43094692, ref="G", alt="A",
             consequence="missense_variant",
@@ -185,7 +185,7 @@ class TestVariantRequestSchema:
         assert d["alphamissense_score"] == 0.94
 
     def test_all_optional_fields_accepted(self, full_variant_row):
-        from src.api.schemas import VariantRequest
+        from genomic_variant_classifier.api.schemas import VariantRequest
         v = VariantRequest(**full_variant_row)
         assert v.alphamissense_score             == pytest.approx(0.92)
         assert v.gene_constraint_oe              == pytest.approx(0.08)
@@ -202,13 +202,13 @@ class TestBatchPredictRequest:
 
     def test_empty_list_rejected(self):
         from pydantic import ValidationError
-        from src.api.schemas import BatchPredictRequest
+        from genomic_variant_classifier.api.schemas import BatchPredictRequest
         with pytest.raises(ValidationError):
             BatchPredictRequest(variants=[])
 
     def test_over_limit_rejected(self):
         from pydantic import ValidationError
-        from src.api.schemas import BatchPredictRequest, MAX_BATCH_SIZE, VariantRequest
+        from genomic_variant_classifier.api.schemas import BatchPredictRequest, MAX_BATCH_SIZE, VariantRequest
         variants = [
             VariantRequest(chrom="1", pos=i + 1, ref="A", alt="T")
             for i in range(MAX_BATCH_SIZE + 1)
@@ -217,7 +217,7 @@ class TestBatchPredictRequest:
             BatchPredictRequest(variants=variants)
 
     def test_single_variant_accepted(self):
-        from src.api.schemas import BatchPredictRequest, VariantRequest
+        from genomic_variant_classifier.api.schemas import BatchPredictRequest, VariantRequest
         req = BatchPredictRequest(
             variants=[VariantRequest(chrom="1", pos=100, ref="A", alt="T")]
         )
@@ -238,19 +238,19 @@ class TestScoreToClassification:
         (0.05, "Benign"),
     ])
     def test_correct_label(self, score, label):
-        from src.api.schemas import score_to_classification
+        from genomic_variant_classifier.api.schemas import score_to_classification
         classification, _ = score_to_classification(score)
         assert classification == label
 
     def test_high_confidence_far_from_boundary(self):
         # score=0.50 is the midpoint of "Uncertain significance" (0.30–0.70)
         # dist = min(0.50-0.30, 0.70-0.50) = 0.20 → "high"
-        from src.api.schemas import score_to_classification
+        from genomic_variant_classifier.api.schemas import score_to_classification
         _, confidence = score_to_classification(0.50)
         assert confidence == "high"
 
     def test_low_confidence_near_boundary(self):
-        from src.api.schemas import score_to_classification
+        from genomic_variant_classifier.api.schemas import score_to_classification
         _, confidence = score_to_classification(0.71)   # just above Likely pathogenic threshold
         assert confidence == "low"
 
@@ -263,26 +263,26 @@ class TestEngineerFeatures:
     """Tests for engineer_features() in src.models.variant_ensemble."""
 
     def test_output_columns_match_tabular_features(self):
-        from src.models.variant_ensemble import engineer_features, TABULAR_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features, TABULAR_FEATURES
         df = pd.DataFrame([{"chrom": "1", "pos": 100, "ref": "A", "alt": "T"}])
         feats = engineer_features(df)
         assert list(feats.columns) == TABULAR_FEATURES
 
     def test_no_nans_in_output(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 100, "ref": "A", "alt": "T"}])
         feats = engineer_features(df)
         assert feats.isnull().sum().sum() == 0
 
     def test_snv_detection(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 100, "ref": "A", "alt": "T"}])
         feats = engineer_features(df)
         assert feats["is_snv"].iloc[0]   == 1
         assert feats["is_indel"].iloc[0] == 0
 
     def test_insertion_is_indel(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 100, "ref": "A", "alt": "ACGT"}])
         feats = engineer_features(df)
         assert feats["is_snv"].iloc[0]       == 0
@@ -291,7 +291,7 @@ class TestEngineerFeatures:
         assert feats["is_deletion"].iloc[0]  == 0
 
     def test_deletion_is_indel(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 100, "ref": "ACGT", "alt": "A"}])
         feats = engineer_features(df)
         assert feats["is_indel"].iloc[0]     == 1
@@ -300,7 +300,7 @@ class TestEngineerFeatures:
         assert feats["is_snv"].iloc[0]       == 0
 
     def test_missense_consequence(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 1, "ref": "A", "alt": "T",
                              "consequence": "missense_variant"}])
         feats = engineer_features(df)
@@ -309,7 +309,7 @@ class TestEngineerFeatures:
         assert feats["is_loss_of_function"].iloc[0]  == 0
 
     def test_lof_consequence(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 1, "ref": "A", "alt": "T",
                              "consequence": "stop_gained"}])
         feats = engineer_features(df)
@@ -317,14 +317,14 @@ class TestEngineerFeatures:
         assert feats["is_missense"].iloc[0]         == 0
 
     def test_frameshift_is_lof(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 1, "ref": "AC", "alt": "A",
                              "consequence": "frameshift_variant"}])
         feats = engineer_features(df)
         assert feats["is_loss_of_function"].iloc[0] == 1
 
     def test_splice_site_consequence(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 1, "ref": "A", "alt": "T",
                              "consequence": "splice_donor_variant"}])
         feats = engineer_features(df)
@@ -332,13 +332,13 @@ class TestEngineerFeatures:
         assert feats["is_loss_of_function"].iloc[0]  == 1
 
     def test_alphamissense_defaults_to_05_when_missing(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 1, "ref": "A", "alt": "T"}])
         feats = engineer_features(df)
         assert feats["alphamissense_score"].iloc[0] == pytest.approx(0.5)
 
     def test_af_raw_defaults_to_zero_when_missing(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 1, "ref": "A", "alt": "T"}])
         feats = engineer_features(df)
         assert feats["af_raw"].iloc[0]        == pytest.approx(0.0)
@@ -346,7 +346,7 @@ class TestEngineerFeatures:
         assert feats["af_is_common"].iloc[0]  == 0
 
     def test_af_is_common_for_high_af(self):
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         df = pd.DataFrame([{"chrom": "1", "pos": 1, "ref": "A", "alt": "T",
                              "allele_freq": 0.33}])
         feats = engineer_features(df)
@@ -355,7 +355,7 @@ class TestEngineerFeatures:
 
     def test_codon_position_in_tabular_features(self):
         """codon_position is derived by VEPConnector (Phase 4) and is now in TABULAR_FEATURES."""
-        from src.models.variant_ensemble import TABULAR_FEATURES, PHASE_2_FEATURES
+        from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, PHASE_2_FEATURES
         assert "codon_position" in TABULAR_FEATURES, (
             "codon_position should be in TABULAR_FEATURES after Phase 4 VEP promotion."
         )
@@ -363,7 +363,7 @@ class TestEngineerFeatures:
 
     def test_batch_consistency(self):
         """engineer_features must produce identical rows regardless of batch size."""
-        from src.models.variant_ensemble import engineer_features
+        from genomic_variant_classifier.models.variant_ensemble import engineer_features
         single = pd.DataFrame([{"chrom": "1", "pos": 100, "ref": "A", "alt": "T",
                                  "consequence": "missense_variant", "allele_freq": 0.001}])
         batch  = pd.concat([single, single], ignore_index=True)
@@ -429,7 +429,7 @@ class TestInferencePipeline:
 
     def test_scaler_applied_when_present(self):
         from sklearn.preprocessing import StandardScaler
-        from src.api.pipeline import InferencePipeline
+        from genomic_variant_classifier.api.pipeline import InferencePipeline
 
         scaler = MagicMock(spec=StandardScaler)
         scaler.transform.side_effect = lambda X: X  # identity
@@ -445,8 +445,8 @@ class TestInferencePipeline:
     def test_save_and_load_roundtrip(self, tmp_path):
         """Roundtrip via from_variant_ensemble — no VariantEnsemble dependency at load time."""
         from sklearn.linear_model import LogisticRegression
-        from src.api.pipeline import InferencePipeline
-        from src.models.variant_ensemble import VariantEnsemble, EnsembleConfig, TABULAR_FEATURES
+        from genomic_variant_classifier.api.pipeline import InferencePipeline
+        from genomic_variant_classifier.models.variant_ensemble import VariantEnsemble, EnsembleConfig, TABULAR_FEATURES
 
         cfg = EnsembleConfig(n_folds=2, model_dir=tmp_path / "models")
         ens = VariantEnsemble(cfg)
@@ -472,7 +472,7 @@ class TestInferencePipeline:
 
     def test_load_wrong_type_raises(self, tmp_path):
         import joblib
-        from src.api.pipeline import InferencePipeline
+        from genomic_variant_classifier.api.pipeline import InferencePipeline
         p = tmp_path / "bad.joblib"
         joblib.dump({"not": "a pipeline"}, p)
         with pytest.raises(TypeError):
@@ -487,7 +487,7 @@ class TestInferencePipeline:
 def client():
     """TestClient with the model pre-loaded as a mock pipeline."""
     from fastapi.testclient import TestClient
-    import src.api.main as api_main
+    import genomic_variant_classifier.api.main as api_main
 
     pipe = _make_pipeline(proba=0.92)
     api_main._PIPELINE = pipe
@@ -512,7 +512,7 @@ class TestHealthEndpoint:
 
     def test_health_model_not_ready_when_no_artifact(self):
         from fastapi.testclient import TestClient
-        import src.api.main as api_main
+        import genomic_variant_classifier.api.main as api_main
 
         api_main._PIPELINE = None
         c = TestClient(api_main.app)
@@ -607,7 +607,7 @@ class TestPredictEndpoint:
 
     def test_predict_503_when_no_model(self):
         from fastapi.testclient import TestClient
-        import src.api.main as api_main
+        import genomic_variant_classifier.api.main as api_main
         original = api_main._PIPELINE
         api_main._PIPELINE = None
         try:
@@ -657,7 +657,7 @@ class TestBatchEndpoint:
 
     def test_batch_503_when_no_model(self):
         from fastapi.testclient import TestClient
-        import src.api.main as api_main
+        import genomic_variant_classifier.api.main as api_main
         original = api_main._PIPELINE
         api_main._PIPELINE = None
         try:
@@ -678,7 +678,7 @@ class TestRsidEndpoint:
 
     def test_rsid_unknown_when_no_index(self, client):
         """With no dbSNP index loaded, /rsid always returns known=false."""
-        import src.api.main as api_main
+        import genomic_variant_classifier.api.main as api_main
         original = api_main._DBSNP_INDEX
         api_main._DBSNP_INDEX = None
         try:
@@ -693,7 +693,7 @@ class TestRsidEndpoint:
     def test_rsid_known_with_index(self, client):
         """With a mock dbSNP index, /rsid resolves locus and returns prediction."""
         import pandas as pd
-        import src.api.main as api_main
+        import genomic_variant_classifier.api.main as api_main
 
         mock_index = pd.DataFrame([{
             "rs_id": "rs12345678",
@@ -722,7 +722,7 @@ class TestRsidEndpoint:
 
     def test_rsid_normalises_prefix(self, client):
         """rs-ID without 'rs' prefix is accepted and normalised."""
-        import src.api.main as api_main
+        import genomic_variant_classifier.api.main as api_main
 
         original = api_main._DBSNP_INDEX
         api_main._DBSNP_INDEX = None
@@ -738,7 +738,7 @@ class TestRsidEndpoint:
         """When pipeline is not loaded, /rsid still resolves locus but no prediction."""
         import pandas as pd
         from fastapi.testclient import TestClient
-        import src.api.main as api_main
+        import genomic_variant_classifier.api.main as api_main
 
         mock_index = pd.DataFrame([{
             "rs_id": "rs99999999",
@@ -772,7 +772,7 @@ class TestApiKeyAuth:
 
     def test_dev_mode_no_key_required(self, client):
         """When API_KEYS env var is empty, all requests pass without a key."""
-        import src.api.auth as auth_module
+        import genomic_variant_classifier.api.auth as auth_module
         original = auth_module._VALID_KEYS
         auth_module._VALID_KEYS = frozenset()   # simulate dev mode
         try:
@@ -783,7 +783,7 @@ class TestApiKeyAuth:
 
     def test_valid_key_accepted(self, client):
         """A request with a valid X-API-Key is accepted."""
-        import src.api.auth as auth_module
+        import genomic_variant_classifier.api.auth as auth_module
         original = auth_module._VALID_KEYS
         auth_module._VALID_KEYS = frozenset({"test-key"})
         try:
@@ -794,7 +794,7 @@ class TestApiKeyAuth:
 
     def test_invalid_key_rejected(self, client):
         """A request with a wrong key returns 401."""
-        import src.api.auth as auth_module
+        import genomic_variant_classifier.api.auth as auth_module
         original = auth_module._VALID_KEYS
         auth_module._VALID_KEYS = frozenset({"test-key"})
         try:
@@ -805,7 +805,7 @@ class TestApiKeyAuth:
 
     def test_missing_key_rejected(self, client):
         """A request with no key returns 401 when API_KEYS is set."""
-        import src.api.auth as auth_module
+        import genomic_variant_classifier.api.auth as auth_module
         original = auth_module._VALID_KEYS
         auth_module._VALID_KEYS = frozenset({"test-key"})
         try:
@@ -816,7 +816,7 @@ class TestApiKeyAuth:
 
     def test_health_always_open(self, client):
         """/health must not require auth even when API_KEYS is set."""
-        import src.api.auth as auth_module
+        import genomic_variant_classifier.api.auth as auth_module
         original = auth_module._VALID_KEYS
         auth_module._VALID_KEYS = frozenset({"test-key"})
         try:

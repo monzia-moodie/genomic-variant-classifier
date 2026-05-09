@@ -167,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Load pipeline ---
     logger.info("Loading pipeline from %s …", args.pipeline)
-    from src.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
     pipeline = InferencePipeline.load(args.pipeline)
 
     # --- Load cohort ---
@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("ECE=%.4f  MCE=%.4f", ece, mce)
 
     # --- Load thresholds (from calibrated file or defaults) ---
-    from src.api.schemas import CLASSIFICATION_THRESHOLDS
+    from genomic_variant_classifier.api.schemas import CLASSIFICATION_THRESHOLDS
     threshold_metrics = _threshold_metrics(y_true, y_prob, CLASSIFICATION_THRESHOLDS)
 
     # --- ROC / PR curves ---
@@ -213,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     prec, rec, pr_thr = precision_recall_curve(y_true, y_prob)
 
     # --- Predictions table ---
-    from src.api.schemas import score_to_classification
+    from genomic_variant_classifier.api.schemas import score_to_classification
     pred_df = pd.DataFrame({
         "variant_id":    df.get("variant_id", pd.Series(
             [f"{r.chrom}:{r.pos}:{r.ref}:{r.alt}" for _, r in df.iterrows()],

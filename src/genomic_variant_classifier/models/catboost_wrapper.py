@@ -65,7 +65,7 @@ due to ordered boosting, but this wrapper still accepts an optional calibration
 mode ('platt' | 'isotonic' | None) for consistency with the rest of the ensemble.
 
 Usage:
-    from src.models.catboost_wrapper import CatBoostVariantClassifier
+    from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
 
     clf = CatBoostVariantClassifier(
         iterations=1000,

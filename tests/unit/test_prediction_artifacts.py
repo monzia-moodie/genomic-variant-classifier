@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.evaluation.prediction_artifacts import RunArtifactWriter
+from genomic_variant_classifier.evaluation.prediction_artifacts import RunArtifactWriter
 
 
 @pytest.fixture

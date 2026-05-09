@@ -73,8 +73,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api.auth import require_api_key
-from src.api.schemas import (
+from genomic_variant_classifier.api.auth import require_api_key
+from genomic_variant_classifier.api.schemas import (
     BatchPredictRequest,
     BatchPredictResponse,
     GeneSummaryResponse,
@@ -200,7 +200,7 @@ async def lifespan(app: FastAPI):
     # --- Load inference pipeline ---
     if MODEL_PATH.exists():
         try:
-            from src.api.pipeline import InferencePipeline
+            from genomic_variant_classifier.api.pipeline import InferencePipeline
             _PIPELINE = InferencePipeline.load(MODEL_PATH)
             logger.info("Loaded inference pipeline from %s", MODEL_PATH)
         except Exception as exc:

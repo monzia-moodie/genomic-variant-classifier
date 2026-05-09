@@ -22,8 +22,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.data.eve import EVEConnector, _hgvsp_to_eve_key, DEFAULT_SCORE
-from src.models.variant_ensemble import TABULAR_FEATURES, engineer_features
+from genomic_variant_classifier.data.eve import EVEConnector, _hgvsp_to_eve_key, DEFAULT_SCORE
+from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, engineer_features
 
 # ---------------------------------------------------------------------------
 # Helpers

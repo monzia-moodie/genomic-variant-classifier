@@ -233,8 +233,8 @@ def _smoke_test(pipeline) -> bool:
 # ---------------------------------------------------------------------------
 
 def cmd_export(args: argparse.Namespace) -> int:
-    from src.api.pipeline import InferencePipeline
-    from src.models.variant_ensemble import TABULAR_FEATURES
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
 
     run_dir = Path(args.input)
     if not run_dir.exists():
@@ -327,7 +327,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return 1
 
     logger.info("Loading %s ...", path)
-    from src.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
     pipeline = InferencePipeline.load(path)
     passed = _smoke_test(pipeline)
     return 0 if passed else 1

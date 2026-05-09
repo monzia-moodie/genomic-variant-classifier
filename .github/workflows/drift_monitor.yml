@@ -212,7 +212,7 @@ jobs:
           if not registry_path.exists():
               print('No registry found — skipping smoke test')
               exit(0)
-          from src.monitoring.registry import ModelRegistry
+          from genomic_variant_classifier.monitoring.registry import ModelRegistry
           registry = ModelRegistry.load(registry_path)
           registry.print_summary()
           prod = registry.current_production()

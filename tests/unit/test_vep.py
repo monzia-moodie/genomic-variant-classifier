@@ -19,8 +19,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from src.data.vep import VEPConnector, _extract_codon_position
-from src.models.variant_ensemble import TABULAR_FEATURES, engineer_features
+from genomic_variant_classifier.data.vep import VEPConnector, _extract_codon_position
+from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, engineer_features
 
 
 # ---------------------------------------------------------------------------

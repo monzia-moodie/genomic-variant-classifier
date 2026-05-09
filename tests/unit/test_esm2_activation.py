@@ -58,7 +58,7 @@ def _has_network() -> bool:
 def esm2_connector():
     """Instantiate ESM2Connector from src/data/esm2.py (confirmed
     2026-04-17)."""
-    from src.data.esm2 import ESM2Connector
+    from genomic_variant_classifier.data.esm2 import ESM2Connector
 
     return ESM2Connector()
 
@@ -109,7 +109,7 @@ def test_esm2_not_in_stub_mode(esm2_connector):
     If UniProt is unreachable (network issue, outage) this xfails rather
     than fails -- network flakes are environmental, not regressions.
     """
-    from src.data import esm2 as esm2_mod
+    from genomic_variant_classifier.data import esm2 as esm2_mod
 
     if esm2_mod._BACKEND is None:
         pytest.skip(

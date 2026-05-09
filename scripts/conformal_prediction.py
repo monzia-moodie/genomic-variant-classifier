@@ -164,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Load pipeline ---
     logger.info("Loading pipeline from %s …", args.pipeline)
-    from src.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
     pipeline = InferencePipeline.load(args.pipeline)
 
     # --- Load calibration split ---

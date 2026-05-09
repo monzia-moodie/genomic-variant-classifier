@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
 
 def load_pipeline(path: str):
     import joblib
-    from src.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
     obj = joblib.load(path)
     if not isinstance(obj, InferencePipeline):
         raise TypeError(f"Expected InferencePipeline, got {type(obj)}")
@@ -125,7 +125,7 @@ def get_raw_scores(pipeline, X_val: pd.DataFrame) -> np.ndarray:
     We pass the already-engineered features directly to the base models,
     bypassing engineer_features() since X_val is already the feature matrix.
     """
-    from src.api.pipeline import INFERENCE_FEATURE_COLUMNS
+    from genomic_variant_classifier.api.pipeline import INFERENCE_FEATURE_COLUMNS
 
     # X_val is the feature matrix from the split parquets — columns already engineered
     X_np = X_val[INFERENCE_FEATURE_COLUMNS].values

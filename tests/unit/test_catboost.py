@@ -111,7 +111,7 @@ def numeric_labels() -> np.ndarray:
 
 @pytest.fixture
 def fitted_classifier(small_variant_df, small_labels):
-    from src.models.catboost_wrapper import CatBoostVariantClassifier
+    from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
     clf = CatBoostVariantClassifier(
         iterations=50, verbose=0, task_type="CPU",
         cat_feature_names=["gene_symbol", "consequence", "chrom", "review_status"],
@@ -127,18 +127,18 @@ def fitted_classifier(small_variant_df, small_labels):
 class TestCatBoostVariantClassifier:
 
     def test_import(self):
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         assert CatBoostVariantClassifier is not None
 
     def test_fit_with_dataframe(self, small_variant_df, small_labels):
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         clf = CatBoostVariantClassifier(iterations=30, verbose=0, task_type="CPU")
         clf.fit(small_variant_df, small_labels)
         assert clf._model is not None
 
     def test_fit_with_numpy(self, numeric_variant_df, numeric_labels):
         """CatBoost must fall back to numerical-only when passed a numpy array."""
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         clf = CatBoostVariantClassifier(iterations=30, verbose=0, task_type="CPU")
         clf.fit(numeric_variant_df.to_numpy(), numeric_labels)
         proba = clf.predict_proba(numeric_variant_df.to_numpy())
@@ -166,7 +166,7 @@ class TestCatBoostVariantClassifier:
 
     def test_missing_categorical_sentinel(self):
         """NA values in categorical columns should be filled with __missing__."""
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         rng = np.random.default_rng(1)
         df  = pd.DataFrame({
             "gene_symbol": ["BRCA1", None, "TP53"] * 20,
@@ -191,7 +191,7 @@ class TestCatBoostVariantClassifier:
         This test uses a clean DataFrame with only one string column so that
         CatBoost doesn't encounter unexpected string values in numeric columns.
         """
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         rng = np.random.default_rng(2)
         n   = 100
         df  = pd.DataFrame({
@@ -230,7 +230,7 @@ class TestCatBoostVariantClassifier:
         assert all(isinstance(name, str) and isinstance(val, float) for name, val in top)
 
     def test_sklearn_estimator_interface(self):
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         clf = CatBoostVariantClassifier(iterations=20, verbose=0, task_type="CPU")
         params = clf.get_params()
         assert "iterations" in params
@@ -238,7 +238,7 @@ class TestCatBoostVariantClassifier:
         assert clf.iterations == 30
 
     def test_isotonic_calibration(self, small_variant_df, small_labels):
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         clf = CatBoostVariantClassifier(
             iterations=30, verbose=0, task_type="CPU", calibrate="isotonic",
             cat_feature_names=["gene_symbol", "consequence", "chrom", "review_status"],
@@ -249,7 +249,7 @@ class TestCatBoostVariantClassifier:
         np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-4)
 
     def test_platt_calibration(self, small_variant_df, small_labels):
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         clf = CatBoostVariantClassifier(
             iterations=30, verbose=0, task_type="CPU", calibrate="platt",
             cat_feature_names=["gene_symbol", "consequence", "chrom", "review_status"],
@@ -259,7 +259,7 @@ class TestCatBoostVariantClassifier:
         assert proba.shape[1] == 2
 
     def test_sample_weight_accepted(self, small_variant_df, small_labels):
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         weights = np.random.default_rng(0).uniform(0.5, 2.0, len(small_labels))
         clf = CatBoostVariantClassifier(
             iterations=20, verbose=0, task_type="CPU",
@@ -269,7 +269,7 @@ class TestCatBoostVariantClassifier:
         assert clf._model is not None
 
     def test_save_load_native(self, fitted_classifier, small_variant_df, tmp_path):
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         model_path = tmp_path / "catboost_model.cbm"
         fitted_classifier.save_catboost_model(model_path)
         assert model_path.exists()
@@ -279,7 +279,7 @@ class TestCatBoostVariantClassifier:
         np.testing.assert_allclose(proba_orig, proba_loaded, atol=1e-5)
 
     def test_not_fitted_raises(self, small_variant_df):
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         from sklearn.exceptions import NotFittedError
         clf = CatBoostVariantClassifier(iterations=10, verbose=0, task_type="CPU")
         with pytest.raises((NotFittedError, Exception)):
@@ -287,7 +287,7 @@ class TestCatBoostVariantClassifier:
 
     def test_auroc_above_random(self, small_variant_df):
         """CatBoost should do better than random on a predictable feature."""
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         from sklearn.metrics import roc_auc_score
         labels = (small_variant_df["cadd_phred"] > 20).astype(int).to_numpy()
         clf = CatBoostVariantClassifier(
@@ -308,13 +308,13 @@ class TestEnsembleIntegration:
 
     def test_catboost_in_base_estimators(self):
         """CatBoost should appear in base_estimators when installed."""
-        from src.models.variant_ensemble import VariantEnsemble, EnsembleConfig
+        from genomic_variant_classifier.models.variant_ensemble import VariantEnsemble, EnsembleConfig
         ensemble = VariantEnsemble(config=EnsembleConfig(skip_catboost=False))
         assert "catboost" in ensemble.base_estimators
 
     def test_skip_catboost_flag(self):
         """EnsembleConfig(skip_catboost=True) should exclude CatBoost."""
-        from src.models.variant_ensemble import VariantEnsemble, EnsembleConfig
+        from genomic_variant_classifier.models.variant_ensemble import VariantEnsemble, EnsembleConfig
         ensemble = VariantEnsemble(config=EnsembleConfig(skip_catboost=True))
         assert "catboost" not in ensemble.base_estimators
 
@@ -326,7 +326,7 @@ class TestEnsembleIntegration:
         Uses numeric_variant_df so RF/XGBoost/LightGBM can handle the
         .values conversion without encountering string data.
         """
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
         received_types: list[str] = []
         orig_fit = CatBoostVariantClassifier.fit
 
@@ -336,7 +336,7 @@ class TestEnsembleIntegration:
 
         CatBoostVariantClassifier.fit = spy_fit
         try:
-            from src.models.variant_ensemble import VariantEnsemble, EnsembleConfig
+            from genomic_variant_classifier.models.variant_ensemble import VariantEnsemble, EnsembleConfig
             config   = EnsembleConfig(n_folds=2, skip_catboost=False)
                 
             
@@ -353,7 +353,7 @@ class TestEnsembleIntegration:
 
     def test_ensemble_predict_proba_with_catboost(self, numeric_variant_df, numeric_labels):
         """Ensemble with CatBoost should produce valid (n, 2) probabilities."""
-        from src.models.variant_ensemble import VariantEnsemble, EnsembleConfig
+        from genomic_variant_classifier.models.variant_ensemble import VariantEnsemble, EnsembleConfig
         config   = EnsembleConfig(n_folds=2, skip_catboost=False)
         ensemble = VariantEnsemble(config=config)
         seq      = pd.Series(["ACGT" * 25] * len(numeric_labels))
@@ -377,8 +377,8 @@ class TestInferencePipelineWithCatBoost:
 
         Uses trained_models= (the actual InferencePipeline kwarg, not base_models=).
         """
-        from src.api.pipeline import InferencePipeline
-        from src.models.catboost_wrapper import CatBoostVariantClassifier
+        from genomic_variant_classifier.api.pipeline import InferencePipeline
+        from genomic_variant_classifier.models.catboost_wrapper import CatBoostVariantClassifier
 
         mock_cb    = MagicMock(spec=CatBoostVariantClassifier)
         mock_cb.predict_proba.return_value = np.tile([0.1, 0.9], (len(numeric_variant_df), 1))
@@ -405,7 +405,7 @@ class TestInferencePipelineWithCatBoost:
 
     def test_pipeline_without_catboost_unaffected(self, numeric_variant_df):
         """Pipeline with no CatBoost model behaves identically to before."""
-        from src.api.pipeline import InferencePipeline
+        from genomic_variant_classifier.api.pipeline import InferencePipeline
         mock_lgbm = MagicMock()
         mock_lgbm.predict_proba.return_value = np.tile([0.1, 0.9], (len(numeric_variant_df), 1))
         mock_meta = MagicMock()

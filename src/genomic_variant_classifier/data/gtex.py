@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 import requests
  
-from src.data.database_connectors import (
+from genomic_variant_classifier.data.database_connectors import (
     CANONICAL_COLUMNS,
     BaseConnector,
     FetchConfig,

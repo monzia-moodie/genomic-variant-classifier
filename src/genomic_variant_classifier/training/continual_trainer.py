@@ -122,9 +122,9 @@ class ContinualLearner:
         Returns a summary dict with drift report, label drift report,
         retraining decision, and new model path (if retrained).
         """
-        from src.monitoring.drift_detector import DriftDetector
-        from src.monitoring.clinvar_tracker import ClinVarTracker
-        from src.monitoring.registry import ModelRegistry
+        from genomic_variant_classifier.monitoring.drift_detector import DriftDetector
+        from genomic_variant_classifier.monitoring.clinvar_tracker import ClinVarTracker
+        from genomic_variant_classifier.monitoring.registry import ModelRegistry
 
         splits_dir = Path(reference_splits_dir)
         logger.info("=== Continual Learning Pipeline: starting ===")
@@ -151,7 +151,7 @@ class ContinualLearner:
         )
         # Build feature matrix for new ClinVar using the existing pipeline
         try:
-            from src.api.pipeline import engineer_features
+            from genomic_variant_classifier.api.pipeline import engineer_features
             X_new = engineer_features(new_clinvar)
             drift_report = detector.check(X_new, timestamp=release_name)
         except Exception as e:
@@ -261,10 +261,10 @@ class ContinualLearner:
         Returns the path to the new registered model artefact.
         """
         import joblib
-        from src.training.ewc import TreeEWCProxy
-        from src.monitoring.drift_detector import LSIFImportanceWeighter
-        from src.monitoring.registry import ModelRegistry
-        from src.api.pipeline import InferencePipeline, INFERENCE_FEATURE_COLUMNS
+        from genomic_variant_classifier.training.ewc import TreeEWCProxy
+        from genomic_variant_classifier.monitoring.drift_detector import LSIFImportanceWeighter
+        from genomic_variant_classifier.monitoring.registry import ModelRegistry
+        from genomic_variant_classifier.api.pipeline import InferencePipeline, INFERENCE_FEATURE_COLUMNS
 
         logger.info("Starting adaptive retraining for release: %s", release_name)
 
@@ -272,7 +272,7 @@ class ContinualLearner:
         current_pipe = InferencePipeline.load(current_model_path)
 
         # Load + process new data
-        from src.data.real_data_prep import DataPrepPipeline, DataPrepConfig
+        from genomic_variant_classifier.data.real_data_prep import DataPrepPipeline, DataPrepConfig
         config = DataPrepConfig(
             min_review_tier=self.config.min_review_tier,
             scale_features=True,

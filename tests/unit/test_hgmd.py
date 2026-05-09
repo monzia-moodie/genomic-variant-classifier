@@ -21,8 +21,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.data.hgmd import HGMDConnector, DISEASE_MUTATION_CLASSES
-from src.models.variant_ensemble import TABULAR_FEATURES, engineer_features
+from genomic_variant_classifier.data.hgmd import HGMDConnector, DISEASE_MUTATION_CLASSES
+from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, engineer_features
 
 # ---------------------------------------------------------------------------
 # Helpers

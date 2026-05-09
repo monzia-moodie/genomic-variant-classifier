@@ -30,7 +30,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.models.variant_ensemble import (
+from genomic_variant_classifier.models.variant_ensemble import (
     TABULAR_FEATURES,
     PHASE_2_FEATURES,
     engineer_features,

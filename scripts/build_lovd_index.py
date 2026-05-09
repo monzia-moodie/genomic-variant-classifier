@@ -449,7 +449,7 @@ def evaluate_against_model(
     from sklearn.metrics import (
         average_precision_score, brier_score_loss, roc_auc_score,
     )
-    from src.api.pipeline import InferencePipeline
+    from genomic_variant_classifier.api.pipeline import InferencePipeline
 
     pipeline = InferencePipeline.load(model_path)
     logger.info("Loaded model: val_auroc=%.4f", pipeline.metadata.val_auroc)

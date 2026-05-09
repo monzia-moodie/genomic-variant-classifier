@@ -22,8 +22,8 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from src.data.dbsnp import DbSNPConnector
-from src.models.variant_ensemble import TABULAR_FEATURES, engineer_features
+from genomic_variant_classifier.data.dbsnp import DbSNPConnector
+from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, engineer_features
 
 # ---------------------------------------------------------------------------
 # Helpers

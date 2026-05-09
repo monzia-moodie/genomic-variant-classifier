@@ -21,8 +21,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.data.clingen import ClinGenConnector, CLASSIFICATION_SCORE
-from src.models.variant_ensemble import TABULAR_FEATURES, engineer_features
+from genomic_variant_classifier.data.clingen import ClinGenConnector, CLASSIFICATION_SCORE
+from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, engineer_features
 
 # ---------------------------------------------------------------------------
 # Helpers

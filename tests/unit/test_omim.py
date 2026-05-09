@@ -21,8 +21,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.data.omim import OMIMConnector
-from src.models.variant_ensemble import TABULAR_FEATURES, engineer_features
+from genomic_variant_classifier.data.omim import OMIMConnector
+from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES, engineer_features
 
 # ---------------------------------------------------------------------------
 # Helpers

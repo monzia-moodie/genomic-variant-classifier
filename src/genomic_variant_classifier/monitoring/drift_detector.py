@@ -31,7 +31,7 @@ State-of-the-art additions beyond the Kirkpatrick/EWC literature:
       that works well for multivariate drift in the joint feature space
 
 Usage:
-    from src.monitoring.drift_detector import DriftDetector, DriftReport
+    from genomic_variant_classifier.monitoring.drift_detector import DriftDetector, DriftReport
 
     detector = DriftDetector.from_reference(
         X_ref=X_train,

@@ -40,7 +40,7 @@ from typing import Optional
 
 import pandas as pd
 
-from src.data.database_connectors import BaseConnector, FetchConfig
+from genomic_variant_classifier.data.database_connectors import BaseConnector, FetchConfig
 
 logger = logging.getLogger(__name__)
 

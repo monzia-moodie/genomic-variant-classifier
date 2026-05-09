@@ -105,7 +105,7 @@ def main() -> int:
             "Build it with:\n"
             '  python -c "'
             "import logging; logging.basicConfig(level=logging.INFO); "
-            "from src.data.database_connectors import ClinVarConnector; "
+            "from genomic_variant_classifier.data.database_connectors import ClinVarConnector; "
             "ClinVarConnector().fetch("
             "local_path='data/raw/clinvar/variant_summary.txt.gz'"
             ").to_parquet('data/processed/clinvar_grch38.parquet', index=False)"
@@ -118,12 +118,12 @@ def main() -> int:
         logger.info("  %-22s %s", k + ":", v)
 
     try:
-        from src.data.real_data_prep import (
+        from genomic_variant_classifier.data.real_data_prep import (
             AnnotationConfig,
             DataPrepConfig,
             DataPrepPipeline,
         )
-        from src.models.variant_ensemble import (
+        from genomic_variant_classifier.models.variant_ensemble import (
             EnsembleConfig,
             VariantEnsemble,
             _write_model_manifest,
@@ -224,7 +224,7 @@ def main() -> int:
             try:
                 logger.info("[GNN-TRACE] gate-passed: entering GNN block")
                 logger.info("[GNN-TRACE] importing src.models.gnn ...")
-                from src.models.gnn import (
+                from genomic_variant_classifier.models.gnn import (
                     GNNScorer,
                     StringDBGraph,
                     build_pyg_dataset,

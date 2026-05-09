@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
 def run_feature_drift(args: argparse.Namespace) -> int:
     """Returns exit code fragment from feature drift check."""
     import pandas as pd
-    from src.monitoring.drift_detector import DriftDetector
+    from genomic_variant_classifier.monitoring.drift_detector import DriftDetector
 
     splits_dir = args.reference_splits
     if not (splits_dir / "X_train.parquet").exists():
@@ -124,7 +124,7 @@ def run_feature_drift(args: argparse.Namespace) -> int:
         logger.info("Building feature matrix from new ClinVar …")
         clinvar = pd.read_parquet(args.new_clinvar)
         try:
-            from src.api.pipeline import engineer_features
+            from genomic_variant_classifier.api.pipeline import engineer_features
             X_new = engineer_features(clinvar)
             X_new = X_new.reindex(columns=X_ref.columns, fill_value=0.0)
         except Exception as e:
@@ -155,7 +155,7 @@ def run_feature_drift(args: argparse.Namespace) -> int:
 def run_label_drift(args: argparse.Namespace) -> tuple[int, object]:
     """Returns (exit_code, label_report)."""
     import pandas as pd
-    from src.monitoring.clinvar_tracker import ClinVarTracker
+    from genomic_variant_classifier.monitoring.clinvar_tracker import ClinVarTracker
 
     splits_dir = args.reference_splits
     meta_path = splits_dir / "meta_test.parquet"
@@ -241,7 +241,7 @@ def main() -> int:
             logger.error("Current model not found: %s", args.current_model)
             return 3
 
-        from src.training.continual_trainer import ContinualLearner, ContinualLearningConfig
+        from genomic_variant_classifier.training.continual_trainer import ContinualLearner, ContinualLearningConfig
         cl_config = ContinualLearningConfig(
             psi_retrain_threshold = args.psi_threshold,
             flip_rate_retrain     = args.flip_rate_threshold,
@@ -265,7 +265,7 @@ def main() -> int:
             logger.info(
                 "Shadow deployment initiated. Promote to production after burn-in with:\n"
                 "  python -c \"\n"
-                "  from src.monitoring.registry import ModelRegistry\n"
+                "  from genomic_variant_classifier.monitoring.registry import ModelRegistry\n"
                 "  r = ModelRegistry.load('%s')\n"
                 "  r.print_summary()\n"
                 "  # r.promote('v?.0.0', 'production')\n"

@@ -5,13 +5,13 @@ Report generation package for the Genomic Variant Classifier.
 
 CHANGES FROM PHASE 1:
   - This __init__.py did not exist; src/reports/ was not a Python package,
-    so `from src.reports.report_generator import ...` raised ModuleNotFoundError
+    so `from genomic_variant_classifier.reports.report_generator import ...` raised ModuleNotFoundError
     even after the module was written to disk (Issue D fixed).
 """
 
 from __future__ import annotations
 
-from src.reports.report_generator import (
+from genomic_variant_classifier.reports.report_generator import (
     ReportGenerator,
     ValidationMetrics,
     bootstrap_metric,

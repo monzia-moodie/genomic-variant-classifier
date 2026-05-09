@@ -34,7 +34,7 @@ pipeline never raises on missing data.
 
 Usage
 -----
-    from src.data.connectors.connector_gnomad_constraint import GnomADConstraintConnector
+    from genomic_variant_classifier.data.connectors.connector_gnomad_constraint import GnomADConstraintConnector
 
     connector = GnomADConstraintConnector(
         tsv_path="data/external/gnomad/gnomad.v4.1.constraint_metrics.tsv.bgz"

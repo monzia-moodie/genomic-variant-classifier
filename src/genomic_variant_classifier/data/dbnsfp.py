@@ -95,7 +95,7 @@ from typing import Optional
 import pandas as pd
 
 # Re-use normalisation helpers from Connector 6 — no duplication
-from src.data.sift_polyphen import _normalise_chrom, _parse_multival
+from genomic_variant_classifier.data.sift_polyphen import _normalise_chrom, _parse_multival
 
 logger = logging.getLogger(__name__)
 

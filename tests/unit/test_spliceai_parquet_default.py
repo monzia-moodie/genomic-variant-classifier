@@ -21,8 +21,8 @@ def test_spliceai_connector_uses_default_parquet_when_present(tmp_path, monkeypa
     instantiate SpliceAIConnector() with NO args. The connector must read
     the default, join it against matching variants, and return non-zero
     splice_ai_score values."""
-    from src.data import spliceai as spliceai_mod
-    from src.data.spliceai import SpliceAIConnector
+    from genomic_variant_classifier.data import spliceai as spliceai_mod
+    from genomic_variant_classifier.data.spliceai import SpliceAIConnector
 
     # Build a tiny fake parquet matching the production schema
     fake_parquet = tmp_path / "spliceai_index.parquet"
@@ -56,7 +56,7 @@ def test_spliceai_connector_uses_default_parquet_when_present(tmp_path, monkeypa
         }
     )
 
-    from src.data.database_connectors import FetchConfig
+    from genomic_variant_classifier.data.database_connectors import FetchConfig
 
     cfg = FetchConfig(cache_dir=tmp_path / "cache")
     connector = SpliceAIConnector(config=cfg)  # no vcf_path: uses DEFAULT_SPLICEAI_PATH

@@ -26,7 +26,7 @@ Two complementary approaches are implemented:
 
 Usage
 -----
-    from src.models.mc_dropout import DeepEnsembleWrapper
+    from genomic_variant_classifier.models.mc_dropout import DeepEnsembleWrapper
     from lightgbm import LGBMClassifier
 
     ens = DeepEnsembleWrapper(

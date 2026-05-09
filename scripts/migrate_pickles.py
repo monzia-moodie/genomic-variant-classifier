@@ -109,7 +109,7 @@ def install_compat_aliases() -> None:
     Required before joblib.load() of any pre-migration pickle. Must be deep
     enough to cover every nested class's __module__: pickle.find_class does
     direct sys.modules[full.dotted.name] lookups, so a top-level alias on
-    'src' alone does NOT make sys.modules['src.api.pipeline'] resolvable.
+    'src' alone does NOT make sys.modules['genomic_variant_classifier.api.pipeline'] resolvable.
 
     Failures during walk are collected and reported but do not abort —
     joblib.load will surface real issues with a precise ModuleNotFoundError
