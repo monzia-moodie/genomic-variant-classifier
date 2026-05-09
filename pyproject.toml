@@ -1,0 +1,32 @@
+# pyproject.toml
+# PEP 621 packaging metadata for genomic-variant-classifier.
+#
+# Replaces setup.py as part of the C1-C5 consolidate-package-layout migration
+# (C2 step). See docs/hypotheses/HYP_consolidate-package-layout.md.
+#
+# Runtime dependencies remain in requirements.txt / requirements-api.txt /
+# requirements-dev.txt (managed via pip-compile). Pre-migration setup.py had
+# no install_requires; this preserves that. Migration to [project.dependencies]
+# is possible at C5 audit but is not required for C2.
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genomic-variant-classifier"
+version = "0.1.0"
+description = "Ensemble ML system for pathogenic variant classification"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Monzia Moodie", email = "monzia.moodie@gmail.com" },
+]
+
+[project.urls]
+Homepage = "https://github.com/monzia-moodie/genomic-variant-classifier"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["genomic_variant_classifier*"]
+namespaces = true
