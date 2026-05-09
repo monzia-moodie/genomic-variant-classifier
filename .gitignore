@@ -69,6 +69,7 @@ data/raw/
 data/processed/*
 !data/processed/gene_pathogenic_counts.parquet
 !data/processed/gene_summary.parquet
+!tests/fixtures/*.parquet
 data/models/
 data/synthetic/
 data/external/gnomad/
@@ -110,19 +111,6 @@ lovd/
 tumor gene data.txt
 variant_ensemble_cff925c.py
 .claude/
-# Scratch files
-catboost_info/
-catboost_wrapper.py
-test_catboost.py
-download_finngen.py
-patch_finngen_wiring.py
-requirements-current.txt
-model/
-outputs/
-agent_layer.zip
-lovd/
-tumor gene data.txt
-variant_ensemble_cff925c.py
 
 data/external/dbnsfp/
 

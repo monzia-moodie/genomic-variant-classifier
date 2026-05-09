@@ -193,7 +193,7 @@ train and test). Training cohort: 1,197,216 variants (20.3% pathogenic).
 ## Repository structure
 
 ```
-src/
+src/genomic_variant_classifier/
   data/          — 15 database connectors + Spark ETL + DataPrepPipeline
   models/        — VariantEnsemble, GNN (GAT), KAN, MC-Dropout, EWC
   api/           — FastAPI service (7 endpoints) + InferencePipeline
@@ -220,7 +220,7 @@ models/
 
 ```bash
 # Run the API
-MODEL_PATH=models/phase2_pipeline.joblib uvicorn src.api.main:app --port 8000
+MODEL_PATH=models/phase2_pipeline.joblib uvicorn genomic_variant_classifier.api.main:app --port 8000
 
 # Classify a variant
 curl -X POST http://localhost:8000/predict \

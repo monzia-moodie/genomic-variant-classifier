@@ -74,7 +74,7 @@ jobs:
         run: |
           pytest tests/unit/ -x -q \
             --tb=short \
-            --cov=src \
+            --cov=genomic_variant_classifier \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml
 
