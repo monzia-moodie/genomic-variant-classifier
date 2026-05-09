@@ -159,3 +159,7 @@ agent_data/
 *.db-shm
 *.db-wal
 .vscode/
+
+# Post-C1 paths for moved agent_layer/ runtime state (was anchored at old path)
+src/genomic_variant_classifier/agent_layer/agent_state.json
+src/genomic_variant_classifier/agent_layer/out.txt
