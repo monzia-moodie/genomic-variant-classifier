@@ -2,9 +2,8 @@ OK    CWD = C:\Projects\genomic-variant-classifier
 OK    PowerShell 7
 OK    Python 3.12.10
 OK    venv = .venv312
-FAIL  Working tree dirty:
-?? docs/sessions/SESSION_2026-05-08_preflight_GREEN_c754554.txt
-INFO  HEAD = c754554 (expected b74daf1 or descendant)
+OK    Working tree clean
+INFO  HEAD = 2eb4f06 (expected b74daf1 or descendant)
 OK    src/__init__.py contains expected re-export
 OK    src/__init__.py re-exports have zero consumers (safe to drop)
 OK    setup.py is 587 bytes
@@ -46,7 +45,3 @@ INFO  No .pre-commit-config.yaml
 INFO  No check_run_id_trailer.py found
 OK    validate_docs.py exists - re-run after C5 doc edits
 
-================================================================
-PRE-FLIGHT RED - resolve these before starting C1:
-  - gitclean
-================================================================
