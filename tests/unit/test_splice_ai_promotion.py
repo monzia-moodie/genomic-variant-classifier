@@ -40,7 +40,7 @@ from genomic_variant_classifier.models.variant_ensemble import (
 # Helpers
 # ---------------------------------------------------------------------------
 MODULE_SRC = (
-    Path(__file__).resolve().parents[2] / "src" / "models" / "variant_ensemble.py"
+    Path(__file__).resolve().parents[2] / "src" / "genomic_variant_classifier" / "models" / "variant_ensemble.py"
 ).read_text(encoding="utf-8")
 
 NEW_PHASE4_FEATURES = [
