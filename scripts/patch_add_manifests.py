@@ -27,7 +27,7 @@ def _write_model_manifest(artifact_path):
 '''
 
 # ── 1. InferencePipeline.save() ──────────────────────────────────────────────
-pipeline_path = Path("src/api/pipeline.py")
+pipeline_path = Path("src/genomic_variant_classifier/api/pipeline.py")
 pipeline_src = pipeline_path.read_text(encoding="utf-8")
 
 old = (
@@ -58,7 +58,7 @@ pipeline_path.write_text(pipeline_src, encoding="utf-8")
 print("patched: src/api/pipeline.py")
 
 # ── 2. VariantEnsemble.save() ────────────────────────────────────────────────
-ensemble_path = Path("src/models/variant_ensemble.py")
+ensemble_path = Path("src/genomic_variant_classifier/models/variant_ensemble.py")
 ensemble_src = ensemble_path.read_text(encoding="utf-8")
 
 old = (

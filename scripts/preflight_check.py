@@ -241,7 +241,7 @@ def gcs_objects_exist(required: dict[str, str]) -> list[tuple[str, bool, str]]:
 
 
 def no_tensorflow_in_ensemble() -> tuple[bool, str]:
-    path = REPO / "src/models/variant_ensemble.py"
+    path = REPO / "src/genomic_variant_classifier/models/variant_ensemble.py"
     if not path.exists():
         return False, f"not found: {path}"
     try:

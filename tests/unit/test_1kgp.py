@@ -404,7 +404,7 @@ def test_population_cols_in_tabular_features() -> None:
 def test_no_basicconfig_in_module() -> None:
     """Logging discipline: connector must not call logging.basicConfig."""
     import ast
-    src_path = Path("src/data/connectors/connector_1kgp.py")
+    src_path = Path("src/genomic_variant_classifier/data/connectors/connector_1kgp.py")
     if not src_path.exists():
         pytest.skip("connector_1kgp.py not yet in src/ — copy it first")
     tree = ast.parse(src_path.read_text())

@@ -9,7 +9,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-PATH = Path("src/data/real_data_prep.py")
+PATH = Path("src/genomic_variant_classifier/data/real_data_prep.py")
 
 EDIT_1_OLD = (
     "        meta_val: pd.DataFrame,\n"

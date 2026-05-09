@@ -2233,7 +2233,7 @@ class TestAnnotationPipeline:
 
     def test_sift_score_fill_is_not_threshold(self):
         import pathlib
-        src = pathlib.Path("src/data/real_data_prep.py").read_text(encoding="utf-8")
+        src = pathlib.Path("src/genomic_variant_classifier/data/real_data_prep.py").read_text(encoding="utf-8")
         assert '"sift_score":' in src and '0.5' in src
         assert '"sift_score":             0.05,' not in src
 
