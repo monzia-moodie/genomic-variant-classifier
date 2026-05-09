@@ -116,6 +116,7 @@ def install_compat_aliases() -> None:
     if any required submodule wasn't aliased.
     """
     import genomic_variant_classifier as _new_root
+    import genomic_variant_classifier.agent_layer  # bind subpackage attr on _new_root before .agent_layer access below
 
     # Top-level aliases (necessary, not sufficient on their own).
     sys.modules.setdefault("src", _new_root)
