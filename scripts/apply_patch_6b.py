@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(".")
-PREP = REPO / "src" / "data" / "real_data_prep.py"
+PREP = REPO / "src" / "genomic_variant_classifier" / "data" / "real_data_prep.py"
 EVAL = REPO / "scripts" / "run_phase2_eval.py"
 
 
