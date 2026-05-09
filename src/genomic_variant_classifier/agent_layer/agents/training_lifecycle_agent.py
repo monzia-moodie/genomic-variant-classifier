@@ -56,8 +56,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents.base_agent import BaseAgent
-from config import (
+from genomic_variant_classifier.agent_layer.agents.base_agent import BaseAgent
+from genomic_variant_classifier.agent_layer.config import (
     CHECKPOINT_DIR,
     DATAPROC_BUCKET,
     DATAPROC_CLUSTER_NAME,
@@ -66,7 +66,7 @@ from config import (
     GCS_CHECKPOINT_PREFIX,
     REQUIRE_HUMAN_APPROVAL,
 )
-from message_bus import (
+from genomic_variant_classifier.agent_layer.message_bus import (
     CHECKPOINT_READY,
     DATA_UPDATED,
     FEATURE_CANDIDATE_ADDED,
@@ -74,7 +74,7 @@ from message_bus import (
     PRIORITY_HIGH,
     PRIORITY_NORMAL,
 )
-from shared_state import SharedState
+from genomic_variant_classifier.agent_layer.shared_state import SharedState
 
 # EWC retraining job — assembled from config dataproc components.
 _MODEL_RETRAIN_SCRIPT = (

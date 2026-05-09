@@ -45,9 +45,9 @@ import logging
 import sys
 from datetime import datetime, timezone
 
-from config import REQUIRE_HUMAN_APPROVAL
-from message_bus import MessageBus
-from shared_state import SharedState
+from genomic_variant_classifier.agent_layer.config import REQUIRE_HUMAN_APPROVAL
+from genomic_variant_classifier.agent_layer.message_bus import MessageBus
+from genomic_variant_classifier.agent_layer.shared_state import SharedState
 
 logger = logging.getLogger("Orchestrator")
 logger.propagate = False
@@ -114,10 +114,10 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def _register_agents(self) -> None:
-        from agents.data_freshness_agent import DataFreshnessAgent
-        from agents.training_lifecycle_agent import TrainingLifecycleAgent
-        from agents.interpretability_agent import InterpretabilityAgent
-        from agents.literature_scout_agent import LiteratureScoutAgent
+        from genomic_variant_classifier.agent_layer.agents.data_freshness_agent import DataFreshnessAgent
+        from genomic_variant_classifier.agent_layer.agents.training_lifecycle_agent import TrainingLifecycleAgent
+        from genomic_variant_classifier.agent_layer.agents.interpretability_agent import InterpretabilityAgent
+        from genomic_variant_classifier.agent_layer.agents.literature_scout_agent import LiteratureScoutAgent
 
         self._agent_registry = {
             "DataFreshnessAgent": DataFreshnessAgent,

@@ -81,7 +81,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from orchestrator import Orchestrator, PIPELINE_DEFINITIONS
-from shared_state import SharedState
+from genomic_variant_classifier.agent_layer.shared_state import SharedState
 
 
 # ---------------------------------------------------------------------------

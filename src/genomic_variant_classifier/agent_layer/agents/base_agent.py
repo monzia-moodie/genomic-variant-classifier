@@ -28,9 +28,9 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
 
-from config import REQUIRE_HUMAN_APPROVAL
-from message_bus import MessageBus
-from shared_state import SharedState
+from genomic_variant_classifier.agent_layer.config import REQUIRE_HUMAN_APPROVAL
+from genomic_variant_classifier.agent_layer.message_bus import MessageBus
+from genomic_variant_classifier.agent_layer.shared_state import SharedState
 
 
 class BaseAgent(ABC):

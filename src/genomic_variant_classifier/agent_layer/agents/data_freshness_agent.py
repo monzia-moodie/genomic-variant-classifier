@@ -42,8 +42,8 @@ from datetime import datetime, timezone
 # requests is imported lazily inside each poll method so the module
 # loads cleanly even before the package is confirmed installed.
 
-from agents.base_agent import BaseAgent
-from config import (
+from genomic_variant_classifier.agent_layer.agents.base_agent import BaseAgent
+from genomic_variant_classifier.agent_layer.config import (
     ALPHAMISSENSE_MANIFEST,  # was ALPHAMISSENSE_MANIFEST_URL
     CLINVAR_FTP_ROOT,  # was CLINVAR_FTP_HOST
     CLINVAR_FTP_VCF_DIR,  # was CLINVAR_FTP_PATH
@@ -57,8 +57,8 @@ from config import (
     REQUIRE_HUMAN_APPROVAL,
     SPARK_INGEST_JOB_PATH,
 )
-from message_bus import DATA_UPDATED, PRIORITY_HIGH
-from shared_state import SharedState
+from genomic_variant_classifier.agent_layer.message_bus import DATA_UPDATED, PRIORITY_HIGH
+from genomic_variant_classifier.agent_layer.shared_state import SharedState
 
 # gnomAD: use a HEAD check against a known stable GCS index file.
 # The ETag/Last-Modified changes on every gnomAD release.

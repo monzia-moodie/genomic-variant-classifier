@@ -89,7 +89,7 @@ for _mod in ("ewc_utils", "shap", "torch", "feedparser", "requests"):
         sys.modules[_mod] = MagicMock()
 
 # Now safe to import project modules
-from message_bus import (
+from genomic_variant_classifier.agent_layer.message_bus import (
     MessageBus,
     DATA_UPDATED,
     CHECKPOINT_READY,
@@ -101,7 +101,7 @@ from message_bus import (
     ALL_SUBJECTS,
     APPROVAL_REQUIRED_SUBJECTS,
 )
-from shared_state import SharedState
+from genomic_variant_classifier.agent_layer.shared_state import SharedState
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +338,7 @@ def _test_summary_includes_message_counts():
 
 def _make_test_agent(state: SharedState):
     """Create a minimal concrete BaseAgent for testing."""
-    from agents.base_agent import BaseAgent
+    from genomic_variant_classifier.agent_layer.agents.base_agent import BaseAgent
 
     class _TestAgent(BaseAgent):
         def run(self, dry_run=False):
@@ -411,7 +411,7 @@ def _test_data_freshness_emits_data_updated():
             }
         )
 
-        from agents.data_freshness_agent import DataFreshnessAgent
+        from genomic_variant_classifier.agent_layer.agents.data_freshness_agent import DataFreshnessAgent
 
         agent = DataFreshnessAgent(state)
 
@@ -458,7 +458,7 @@ def _test_data_freshness_emits_data_updated():
 def _test_data_freshness_dry_run_no_message():
     """dry_run=True must not send any real messages."""
     with _TempState() as state:
-        from agents.data_freshness_agent import DataFreshnessAgent
+        from genomic_variant_classifier.agent_layer.agents.data_freshness_agent import DataFreshnessAgent
 
         agent = DataFreshnessAgent(state)
 
@@ -511,7 +511,7 @@ def _test_training_processes_data_updated():
         )
         bus.approve(msg_id)
 
-        from agents.training_lifecycle_agent import TrainingLifecycleAgent
+        from genomic_variant_classifier.agent_layer.agents.training_lifecycle_agent import TrainingLifecycleAgent
 
         agent = TrainingLifecycleAgent(state)
 
@@ -548,7 +548,7 @@ def _test_training_defers_on_unapproved_data_updated():
             },
         )
 
-        from agents.training_lifecycle_agent import TrainingLifecycleAgent
+        from genomic_variant_classifier.agent_layer.agents.training_lifecycle_agent import TrainingLifecycleAgent
 
         agent = TrainingLifecycleAgent(state)
 
@@ -577,7 +577,7 @@ def _test_training_stores_instability_flags():
             requires_approval=False,
         )
 
-        from agents.training_lifecycle_agent import TrainingLifecycleAgent
+        from genomic_variant_classifier.agent_layer.agents.training_lifecycle_agent import TrainingLifecycleAgent
 
         agent = TrainingLifecycleAgent(state)
 
@@ -609,7 +609,7 @@ def _test_training_stores_feature_candidates():
             requires_approval=False,
         )
 
-        from agents.training_lifecycle_agent import TrainingLifecycleAgent
+        from genomic_variant_classifier.agent_layer.agents.training_lifecycle_agent import TrainingLifecycleAgent
 
         agent = TrainingLifecycleAgent(state)
 
@@ -648,7 +648,7 @@ def _test_interpretability_processes_checkpoint_ready():
         )
         bus.approve(msg_id)
 
-        from agents.interpretability_agent import InterpretabilityAgent
+        from genomic_variant_classifier.agent_layer.agents.interpretability_agent import InterpretabilityAgent
 
         agent = InterpretabilityAgent(state)
 
@@ -702,7 +702,7 @@ def _test_interpretability_skips_duplicate_checkpoint():
         )
         bus.approve(msg_id)
 
-        from agents.interpretability_agent import InterpretabilityAgent
+        from genomic_variant_classifier.agent_layer.agents.interpretability_agent import InterpretabilityAgent
 
         agent = InterpretabilityAgent(state)
         result = agent.run(dry_run=False)
@@ -729,7 +729,7 @@ def _test_interpretability_no_flag_no_message():
         )
         bus.approve(msg_id)
 
-        from agents.interpretability_agent import InterpretabilityAgent
+        from genomic_variant_classifier.agent_layer.agents.interpretability_agent import InterpretabilityAgent
 
         agent = InterpretabilityAgent(state)
 
@@ -748,7 +748,7 @@ def _test_interpretability_no_flag_no_message():
 
 def _test_literature_emits_candidate_per_new_entry():
     with _TempState() as state:
-        from agents.literature_scout_agent import LiteratureScoutAgent
+        from genomic_variant_classifier.agent_layer.agents.literature_scout_agent import LiteratureScoutAgent
 
         agent = LiteratureScoutAgent(state)
 
@@ -792,7 +792,7 @@ def _test_literature_emits_candidate_per_new_entry():
 
 def _test_literature_dry_run_no_message():
     with _TempState() as state:
-        from agents.literature_scout_agent import LiteratureScoutAgent
+        from genomic_variant_classifier.agent_layer.agents.literature_scout_agent import LiteratureScoutAgent
 
         agent = LiteratureScoutAgent(state)
 
@@ -920,7 +920,7 @@ def _test_full_signal_chain():
         bus.approve(data_msg_id)
 
         # Step 3: TrainingLifecycle processes it → emits CHECKPOINT_READY
-        from agents.training_lifecycle_agent import TrainingLifecycleAgent
+        from genomic_variant_classifier.agent_layer.agents.training_lifecycle_agent import TrainingLifecycleAgent
 
         train_agent = TrainingLifecycleAgent(state)
 
@@ -942,7 +942,7 @@ def _test_full_signal_chain():
         bus.approve(cp_msg_id)
 
         # Step 5: Interpretability runs → finds instability → sends FEATURE_INSTABILITY
-        from agents.interpretability_agent import InterpretabilityAgent
+        from genomic_variant_classifier.agent_layer.agents.interpretability_agent import InterpretabilityAgent
 
         interp_agent = InterpretabilityAgent(state)
 
@@ -959,7 +959,7 @@ def _test_full_signal_chain():
         assert FEATURE_INSTABILITY in subjects
 
         # Step 6: LiteratureScout finds a candidate → sends FEATURE_CANDIDATE_ADDED
-        from agents.literature_scout_agent import LiteratureScoutAgent
+        from genomic_variant_classifier.agent_layer.agents.literature_scout_agent import LiteratureScoutAgent
 
         lit_agent = LiteratureScoutAgent(state)
 

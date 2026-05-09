@@ -52,8 +52,8 @@ from typing import Any
 # methods so that the agent module loads cleanly even if they are not yet
 # installed in the environment.
 
-from agents.base_agent import BaseAgent
-from config import (
+from genomic_variant_classifier.agent_layer.agents.base_agent import BaseAgent
+from genomic_variant_classifier.agent_layer.config import (
     BIORXIV_RSS_FEEDS,
     CLINGEN_API_BASE,
     LITERATURE_CANDIDATE_MIN_SCORE,
@@ -67,8 +67,8 @@ from config import (
     NCBI_API_KEY,
     NCBI_EUTILS_BASE,
 )
-from message_bus import FEATURE_CANDIDATE_ADDED, PRIORITY_NORMAL
-from shared_state import SharedState
+from genomic_variant_classifier.agent_layer.message_bus import FEATURE_CANDIDATE_ADDED, PRIORITY_NORMAL
+from genomic_variant_classifier.agent_layer.shared_state import SharedState
 
 # Minimum days between scout runs (not in config — defined here).
 _LITERATURE_INTERVAL_DAYS = 7

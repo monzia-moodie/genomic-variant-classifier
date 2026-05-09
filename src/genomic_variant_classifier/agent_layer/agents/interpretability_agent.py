@@ -59,21 +59,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agents.base_agent import BaseAgent
-from config import (
+from genomic_variant_classifier.agent_layer.agents.base_agent import BaseAgent
+from genomic_variant_classifier.agent_layer.config import (
     CHECKPOINT_DIR,
     EXPECTED_HIGH_IMPORTANCE_FEATURES,
     SHAP_IMPORTANCE_DELTA,  # was SHAP_INSTABILITY_THRESHOLD
     SHAP_REPORT_DIR,
     VAL_PARQUET,  # was VALIDATION_PARQUET_PATH
 )
-from message_bus import (
+from genomic_variant_classifier.agent_layer.message_bus import (
     CHECKPOINT_READY,
     FEATURE_INSTABILITY,
     PRIORITY_HIGH,
     PRIORITY_NORMAL,
 )
-from shared_state import SharedState
+from genomic_variant_classifier.agent_layer.shared_state import SharedState
 
 # Number of days between scheduled SHAP audits (not in config — defined here).
 _INTERPRETABILITY_INTERVAL_DAYS = 7
