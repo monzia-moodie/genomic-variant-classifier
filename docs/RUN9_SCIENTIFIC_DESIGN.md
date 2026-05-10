@@ -30,8 +30,8 @@ The total new engineering scope is:
 2. A Run 9 scope that produces eight distinct scientific outputs (§3), not one.
 3. Four prerequisite modules to build before launch (§4):
    `scripts/run_phase2_eval.py` (ablation harness),
-   `src/evaluation/prediction_artifacts.py` (OOF + SHAP + calibration dump),
-   `src/data/splits.py` (unseen-gene holdout),
+   `src/genomic_variant_classifier/evaluation/prediction_artifacts.py` (OOF + SHAP + calibration dump),
+   `src/genomic_variant_classifier/data/splits.py` (unseen-gene holdout),
    preflight subprocess fix.
 4. A post-run documentation contract (§6) that is checked in CI, not trusted.
 
@@ -56,8 +56,8 @@ for any future run.
 | GCS SpliceAI parquet | present (confirmed via `gcloud storage ls` in prior session) | same path |
 | SpliceAI test cache | deleted locally, regenerates on full pytest | fixture-scope gap |
 | STRING DB cache | fixed in commit `0a02e5d` | but never actually exercised on GPU in Run 8 |
-| ESM-2 connector | `src/data/esm2.py`, `transformers`-backed, scalar output `esm2_delta_norm` | **silent zero** in Runs 6/7/8 |
-| EVE connector | `src/data/eve.py`, needs `wt_aa`/`mt_aa`/`position`/`mutations_protein_name` | **almost certainly silent zero**, unverified |
+| ESM-2 connector | `src/genomic_variant_classifier/data/esm2.py`, `transformers`-backed, scalar output `esm2_delta_norm` | **silent zero** in Runs 6/7/8 |
+| EVE connector | `src/genomic_variant_classifier/data/eve.py`, needs `wt_aa`/`mt_aa`/`position`/`mutations_protein_name` | **almost certainly silent zero**, unverified |
 | PyTorch NN migration | complete, commit `38656bc` | 4 NNs off TensorFlow |
 | Vast.ai | destroyed, ~$23.52 credit remaining | no live GPU |
 
@@ -322,7 +322,7 @@ Zeroing out the column is the cleanest ablation for tree models (the column
 becomes constant so the split-info is 0); for the GNN ablation, we drop the
 GNN column entirely because the stacker should not see it at all.
 
-### 4.2 `src/evaluation/prediction_artifacts.py` — the saver
+### 4.2 `src/genomic_variant_classifier/evaluation/prediction_artifacts.py` — the saver
 
 A single class `RunArtifactWriter` that the training script instantiates
 once, hands to the ensemble, and calls at every natural checkpoint:
@@ -346,7 +346,7 @@ deprecated `gsutil` per the standing rule).
 
 Starter code delivered alongside this doc.
 
-### 4.3 `src/data/splits.py` — the splitters
+### 4.3 `src/genomic_variant_classifier/data/splits.py` — the splitters
 
 Single module with two functions:
 
@@ -578,11 +578,11 @@ cycle. Estimated effort in parentheses.
    all tests that touch SpliceAI connector; widen `_isolate_spliceai`
    fixture scope from class to module. Test: `pytest` run does not
    regenerate `spliceai_scores_snv.parquet`.
-3. **T3** (3–4 h): `src/data/splits.py` with `gene_stratified_split` and
+3. **T3** (3–4 h): `src/genomic_variant_classifier/data/splits.py` with `gene_stratified_split` and
    `unseen_gene_holdout_split`. Hash-stable gene selection. Unit tests
    covering: no gene leak between sets, holdout stability across seeds,
    fraction constraint within 1 %.
-4. **T4** (4–6 h): `src/evaluation/prediction_artifacts.py`
+4. **T4** (4–6 h): `src/genomic_variant_classifier/evaluation/prediction_artifacts.py`
    (`RunArtifactWriter`). Unit tests covering: atomic-write semantics,
    manifest schema, re-run idempotency (same run id → same output).
 5. **T5** (6–8 h): `scripts/run_phase2_eval.py` ablation harness. Uses T3
@@ -652,8 +652,8 @@ successful.
 | `scripts/run_phase2_eval.py` | **new** | ablation harness |
 | `scripts/predict_vus.py` | **new** | VUS ranking, no-GPU |
 | `scripts/generate_run_report.py` | **new** | auto-populate session doc |
-| `src/evaluation/prediction_artifacts.py` | **new** | `RunArtifactWriter` |
-| `src/data/splits.py` | **new** | gene-stratified + unseen-gene |
+| `src/genomic_variant_classifier/evaluation/prediction_artifacts.py` | **new** | `RunArtifactWriter` |
+| `src/genomic_variant_classifier/data/splits.py` | **new** | gene-stratified + unseen-gene |
 | `tests/unit/test_prediction_artifacts.py` | **new** | writer unit tests |
 | `tests/unit/test_splits.py` | **new** | splitter unit tests |
 | `tests/unit/test_run_phase2_eval.py` | **new** | ablation harness smoke tests |

@@ -43,7 +43,7 @@
 
 ## Phase 3C — Next (New Biological Signals)
 
-Pending: ESM-2 embeddings (src/data/esm2.py exists — ready to integrate),
+Pending: ESM-2 embeddings (src/genomic_variant_classifier/data/esm2.py exists — ready to integrate),
 gnomAD constraint metrics (pLI, LOEUF), LOVD (blocked — IP ban),
 UK Biobank/TOPMed AFs
 

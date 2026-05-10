@@ -30,7 +30,7 @@ The LOAD REPORT format itself is new in transformers 5.x.
 - Do NOT use `model(input_ids).pooler_output` without first training the
   pooler on a downstream task; those weights are random.
 - The 7,511,801 figure is the canonical base-encoder param count and should be
-  the expected value in `src/data/hgvsp_parser.py` smoke tests; NOT the 8M
+  the expected value in `src/genomic_variant_classifier/data/hgvsp_parser.py` smoke tests; NOT the 8M
   figure on the model card (which includes the LM head).
 
 ## Verification

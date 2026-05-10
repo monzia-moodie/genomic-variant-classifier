@@ -75,7 +75,7 @@ NOT launched. GPU has NOT been spent.
 - **ESM-2 has been inert across Runs 6, 7, 8**. Root cause is a
   missing HGVSp parser upstream — see INCIDENT doc. Run 9 will
   ALSO have ESM-2 inert; this is known and documented. Run 10
-  priority: build `src/data/hgvsp_parser.py` (1-2 day task).
+  priority: build `src/genomic_variant_classifier/data/hgvsp_parser.py` (1-2 day task).
 - **EVE is probably also inert** for the same reason. Not verified
   yet; can bundle fix with the HGVSp parser.
 - **The real value of Run 9** is testing SpliceAI and GNN

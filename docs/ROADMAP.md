@@ -60,7 +60,7 @@ evidence at ingestion time.
 ### Planned Feature Schema (5 new features)
 
 ```python
-# connector: src/data/database_connectors.py — PsychGWASConnector
+# connector: src/genomic_variant_classifier/data/database_connectors.py — PsychGWASConnector
 # DEFAULT_SCORE = 0.0 (no signal — correct default for rare pathogenic variants)
 
 gwas_psych_min_pval           # min p-value across all 52 studies
@@ -475,7 +475,7 @@ high-dimensional regime. Analytic sensitivity complements SHAP.
 
 Implementation plan (Run 9 prep):
   1. Clone spectral-paths, audit code quality
-  2. Write src/models/spectral_path_classifier.py — sklearn wrapper
+  2. Write src/genomic_variant_classifier/models/spectral_path_classifier.py — sklearn wrapper
      with predict_proba via Platt scaling on regression output
   3. Add "spectral_path" to base_estimators in run_phase2_eval.py
   4. Benchmark against 78-feature set on synthetic data first

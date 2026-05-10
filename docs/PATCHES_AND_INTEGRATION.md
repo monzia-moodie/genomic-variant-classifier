@@ -8,7 +8,7 @@ Apply in order. Each patch has a verification step at the end.
 
 ---
 
-## Patch 1 — `src/models/variant_ensemble.py`: expose OOF predictions
+## Patch 1 — `src/genomic_variant_classifier/models/variant_ensemble.py`: expose OOF predictions
 
 **Why:** the mainline `VariantEnsemble.fit()` computes OOF predictions via
 `cross_val_predict`, uses them to train the stacker, and then discards
@@ -38,7 +38,7 @@ src\models\variant_ensemble.py:480:        self.meta_learner.fit(oof_preds, y_ar
 
 ### 1b. Apply the patch
 
-In `src/models/variant_ensemble.py`, find the line:
+In `src/genomic_variant_classifier/models/variant_ensemble.py`, find the line:
 
 ```python
         oof_preds = oof_preds[:, valid_cols]
@@ -64,7 +64,7 @@ And insert FIVE lines AFTER it, BEFORE the existing
 ### 1c. Verify
 
 ```powershell
-python -c "import ast; ast.parse(open('src/models/variant_ensemble.py').read()); print('OK')"
+python -c "import ast; ast.parse(open('src/genomic_variant_classifier/models/variant_ensemble.py').read()); print('OK')"
 
 Select-String -Path src\models\variant_ensemble.py `
     -Pattern "self\.oof_predictions_" |
@@ -89,9 +89,9 @@ code cannot mutate the stacker's training data accidentally."
 
 ---
 
-## Patch 2 — `src/evaluation/__init__.py`: export RunArtifactWriter
+## Patch 2 — `src/genomic_variant_classifier/evaluation/__init__.py`: export RunArtifactWriter
 
-**Why:** keeps imports clean. `from src.evaluation.prediction_artifacts
+**Why:** keeps imports clean. `from genomic_variant_classifier.evaluation.prediction_artifacts
 import RunArtifactWriter` works regardless, but re-exporting from the
 package matches the existing pattern (ClinicalEvaluator is re-exported
 there).
@@ -104,17 +104,17 @@ Get-Content src\evaluation\__init__.py
 
 ### 2b. Append RunArtifactWriter export
 
-Edit `src/evaluation/__init__.py` so it ends with both imports:
+Edit `src/genomic_variant_classifier/evaluation/__init__.py` so it ends with both imports:
 
 ```python
-from src.evaluation.evaluator import ClinicalEvaluator
-from src.evaluation.prediction_artifacts import RunArtifactWriter
+from genomic_variant_classifier.evaluation.evaluator import ClinicalEvaluator
+from genomic_variant_classifier.evaluation.prediction_artifacts import RunArtifactWriter
 ```
 
 ### 2c. Verify
 
 ```powershell
-python -c "from src.evaluation import ClinicalEvaluator, RunArtifactWriter; print('OK')"
+python -c "from genomic_variant_classifier.evaluation import ClinicalEvaluator, RunArtifactWriter; print('OK')"
 ```
 
 ### 2d. Commit
@@ -173,10 +173,10 @@ git add src\data\splits.py src\evaluation\prediction_artifacts.py `
         tests\unit\test_splits.py tests\unit\test_prediction_artifacts.py
 git commit -m "feat(run9): splits + RunArtifactWriter + unit tests
 
-Adds gene-stratified and hash-stable unseen-gene splitters (src/data/
+Adds gene-stratified and hash-stable unseen-gene splitters (src/genomic_variant_classifier/data/
 splits.py), the RunArtifactWriter that emits the Rule-5 artefact set
-(src/evaluation/prediction_artifacts.py), and unit tests for both.
-Re-exports RunArtifactWriter from src.evaluation for symmetry with
+(src/genomic_variant_classifier/evaluation/prediction_artifacts.py), and unit tests for both.
+Re-exports RunArtifactWriter from genomic_variant_classifier.evaluation for symmetry with
 ClinicalEvaluator.
 
 Hash stability of unseen_gene_holdout_split is the key invariant:
@@ -262,7 +262,7 @@ stale pre-4/19 parquet)."
 The v1 version of this doc proposed adding `y_train/y_val/y_test.parquet`
 persistence to `run_phase2_eval.py`. **Not needed** — verified
 2026-04-19 that `DataPrepPipeline._save_splits` at
-`src/data/real_data_prep.py:1207-1209` already writes all three
+`src/genomic_variant_classifier/data/real_data_prep.py:1207-1209` already writes all three
 `y_*.parquet` files. Skip.
 
 ---
@@ -344,7 +344,7 @@ if _splits_dir.exists():
 ### Option 6b — proper: train GNN inside DataPrepPipeline
 
 Move the GNN training flow from `scripts/run_phase2_eval.py` into
-`src/data/real_data_prep.py` as a new stage between feature engineering
+`src/genomic_variant_classifier/data/real_data_prep.py` as a new stage between feature engineering
 and scaling. This is the correct long-term architecture (GNN scores
 become a first-class feature, not a post-hoc injection), but requires
 threading STRING DB paths through `AnnotationConfig` and restructuring

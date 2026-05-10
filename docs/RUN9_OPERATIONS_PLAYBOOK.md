@@ -120,7 +120,7 @@ the leak is fixed.
 
 ---
 
-## Step 3 — Add `src/data/splits.py` (T3)
+## Step 3 — Add `src/genomic_variant_classifier/data/splits.py` (T3)
 
 ```powershell
 # 3a. Download splits.py + test_splits.py to:
@@ -130,7 +130,7 @@ the leak is fixed.
 # 3b. Confirm presence and syntax
 Test-Path src\data\splits.py
 Test-Path tests\unit\test_splits.py
-python -c "import ast; ast.parse(open('src/data/splits.py').read()); print('splits OK')"
+python -c "import ast; ast.parse(open('src/genomic_variant_classifier/data/splits.py').read()); print('splits OK')"
 python -c "import ast; ast.parse(open('tests/unit/test_splits.py').read()); print('test_splits OK')"
 
 # 3c. Run the tests
@@ -142,7 +142,7 @@ python -m pytest tests\unit\test_splits.py -v
 
 ---
 
-## Step 4 — Add `src/evaluation/prediction_artifacts.py` (T4)
+## Step 4 — Add `src/genomic_variant_classifier/evaluation/prediction_artifacts.py` (T4)
 
 ```powershell
 # 4a. Download prediction_artifacts.py + test_prediction_artifacts.py to:
@@ -150,7 +150,7 @@ python -m pytest tests\unit\test_splits.py -v
 #     C:\Projects\genomic-variant-classifier\tests\unit\test_prediction_artifacts.py
 
 # 4b. Syntax + install shap if missing (we need it for SHAP support)
-python -c "import ast; ast.parse(open('src/evaluation/prediction_artifacts.py').read()); print('OK')"
+python -c "import ast; ast.parse(open('src/genomic_variant_classifier/evaluation/prediction_artifacts.py').read()); print('OK')"
 python -c "import shap; print('shap', shap.__version__)" 2>&1
 # If not installed:  pip install shap
 
