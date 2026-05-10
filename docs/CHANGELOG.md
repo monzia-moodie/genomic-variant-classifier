@@ -894,3 +894,44 @@ Docker build smoke test).
 - `agent_data/c5_3b_apply_gitignore_cleanup.py`
 - `agent_data/c5_3b_batch.ps1`
 - Session doc: `docs/sessions/SESSION_2026-05-09_C5.md`
+
+---
+
+## 2026-05-10 — Architectural cleanup: GCS retirement (Commits 1-4 of cleanup arc)
+
+### Attempted
+- Complete the SCP-only architectural pivot started by the 2026-04-29 GCP project deletion (`INCIDENT_2026-04-29_gcp-billing-deletion.md`). Required four ordered commits: incident formalization, runtime GCS strip, operational docs rewrite, and session log + CHANGELOG cap.
+
+### Failed
+- **Stage 3 batch parser** (parse-time, no writes, recovered): PowerShell `$p:` in double-quoted strings parsed as scope/drive prefix. Anchor at L162:33 reported `Variable reference is not valid. ':' was not followed by a valid variable name character.` Fixed by wrapping in `${p}:` form.
+- **Stage 3 P1.6 dry-run** (anchor not found, no writes, recovered): anchor at `scripts/run9_launch.md:200-201` had a trailing `\n` but the file ends at L201 without a terminal newline. Fixed by removing the trailing newline from the P1.6 anchor and replacement (matches both `receipt.` and `receipt.\n[more]` cases via `text.count(old)`).
+- **Save procedure silent failure** (state corruption, recovered): `Move-Item -Force` from `~\Downloads` to `agent_data\` removes the source. Subsequent re-attempts find the source missing and silently no-op, leaving `agent_data\` with no file at all. Fixed by adding a `Test-Path` source check BEFORE removing the destination.
+
+### Fixed
+- **Commit 1/4 (`b15a625`)** — `docs(incident): formalize 2026-04-29 GCP project deletion + SCP-only architectural pivot`. Created `docs/incidents/INCIDENT_2026-04-29_gcp-billing-deletion.md` (4065 bytes); deleted stale `secrets/gcp-sa-key.json`.
+- **Commit 2/4 (`aad8f5a`)** — `chore(arch): strip GCS from active runtime code`. Removed `upload_to_gcs()` (`prediction_artifacts.py`), `gcloud auth` block (`preflight_check.py`), GCS bucket config (`agent_layer/config.py`), GCS-mode pytest assertions (`agent_layer/test_message_bus.py`). 4 files, 5 insertions, 90 deletions. Live `upload_to_gcs` callers post-strip: 0.
+- **Commit 3/4 (`feece15`)** — `docs(arch): rewrite operational docs for SCP-only architecture`. 4 files, 20 atomic patches, 30 GCS hit-lines removed: `scripts/run9_launch.md` (11), `docs/HANDOFF_run9_launch.md` (2), `docs/RUN9_OPERATIONS_PLAYBOOK.md` (9), `docs/RUN9_SCIENTIFIC_DESIGN.md` (8). 62 insertions, 62 deletions (balanced textual rewrite). Post-patch GCS hit count across all four files: 0.
+- **Commit 4/4 (this commit)** — session log + CHANGELOG cap.
+
+### Learned
+- **STANDING RULE — PowerShell variable-colon hazard:** in double-quoted strings, `"$varname:..."` parses as scope/drive prefix (matches `$env:`, `$global:`, `$script:` family). Use `"${varname}:..."` when followed by a literal colon. Add the brace-delimited form to the standing-rules list of PowerShell hygiene patterns.
+- **STANDING RULE — EOF-newline anchor:** multi-line `replace` anchors at or near EOF must not include a terminal `\n`. The anchor without trailing newline matches both `text.` (EOF) and `text.\n[more]` cases via Python's `str.count(old)`. P1.6's failure proved this empirically; the file ends without a trailing newline.
+- **STANDING RULE — Move-Item is destructive:** Windows `Move-Item -Force` removes the source after the move. Save procedures must `Test-Path` the source BEFORE removing the destination. Pattern: verify Downloads has the file → only then delete `agent_data\` → then move.
+- **STANDING RULE — SHA-256 fingerprint verification:** byte-count alone can miss "downloaded the cached pre-fix version" failures (two file versions can share a byte count by coincidence). Each chat-delivered file should carry a SHA-256 fingerprint the user verifies before save.
+- Helper writes with `newline="\n"` for deterministic LF output; Git `core.autocrlf=true` on Windows produces benign `LF will be replaced by CRLF` warnings at staging. Repo content remains LF-normalized; the warnings have no functional impact.
+- Architectural state after cleanup arc: GCP project `genomic-variant-prod` permanently destroyed; no remote object storage; data flow is local Windows source-of-truth ↔ Vast.ai GPU scratch (SCP via `id_lambda_run8`) ↔ Drive via rclone `genvarcla:` for agent-layer durability only. `INCIDENT_2026-04-29` is the canonical verification-rule supersession of the 2026-04-17 GCS-receipt rule.
+
+### Commits
+- `b15a625` — Commit 1/4: incident formalization (4065 bytes of incident doc, secret deleted)
+- `aad8f5a` — Commit 2/4: runtime GCS strip (4 files, +5/-90)
+- `feece15` — Commit 3/4: operational docs rewrite (4 files, +62/-62)
+- (this commit) — Commit 4/4: session log + CHANGELOG cap
+
+### Refs
+- `agent_data/arch_cleanup_stage3_discovery.ps1` (5266 bytes)
+- `agent_data/arch_cleanup_stage3_code.py` (21838 bytes; SHA `154884df6e976e1614c43c879e7dd71bbcdb1222ce61f277dd379fdd0b33fc1f`)
+- `agent_data/arch_cleanup_stage3_batch.ps1` (8991 bytes; SHA `952daab6457d22c9459c5fe9288030eb9f117c776ba57ac769e8957ecf5c1fae`)
+- `agent_data/arch_cleanup_stage4_code.py` (this commit's helper)
+- `agent_data/arch_cleanup_stage4_batch.ps1` (this commit's batch)
+- Session doc: `docs/sessions/SESSION_2026-05-10_arch-cleanup.md`
+- Incident doc: `docs/incidents/INCIDENT_2026-04-29_gcp-billing-deletion.md`
