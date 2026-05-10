@@ -75,7 +75,7 @@ ALPHAMISSENSE_MANIFEST  = (
 GCP_PROJECT_ID         = os.getenv("GCP_PROJECT_ID", "your-gcp-project-id")
 GCP_REGION             = os.getenv("GCP_REGION", "us-central1")
 DATAPROC_CLUSTER_NAME  = os.getenv("DATAPROC_CLUSTER", "gvc-spark-cluster")
-DATAPROC_BUCKET        = os.getenv("DATAPROC_BUCKET", "gs://your-bucket/gvc")
+DATAPROC_BUCKET        = os.getenv("DATAPROC_BUCKET", "")  # GCS retired 2026-04-29 (INCIDENT_2026-04-29)
 SPARK_INGEST_JOB_PATH  = f"{DATAPROC_BUCKET}/jobs/vcf_ingest.py"
 
 
@@ -105,7 +105,7 @@ RESNET_SUBDIR          = "resnet50"
 ENSEMBLE_SUBDIR        = "ensemble"
 
 # GCS checkpoint prefix (mirrors local structure in the cloud)
-GCS_CHECKPOINT_PREFIX  = os.getenv("GVC_GCS_CHECKPOINTS", "gs://your-bucket/gvc/checkpoints")
+GCS_CHECKPOINT_PREFIX  = os.getenv("GVC_GCS_CHECKPOINTS", "")  # GCS retired 2026-04-29 (INCIDENT_2026-04-29)
 
 # Google Drive mount root (Colab: /content/drive/MyDrive/gvc)
 GDRIVE_CHECKPOINT_DIR  = Path(os.getenv(

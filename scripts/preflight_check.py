@@ -16,7 +16,6 @@ What this checks:
  2. HEAD matches origin/main
  3. Full pytest suite is green (can be skipped for fast iteration)
  4. Required local data files exist
- 5. Required GCS objects exist (verifiable via `gcloud storage ls`)
  6. No TensorFlow imports linger in variant_ensemble.py
  7. transformers and torch available somewhere (requirements or site-packages)
  8. agent_state.json is parseable (if present)
@@ -215,31 +214,6 @@ def files_exist(required: dict[str, Path]) -> list[tuple[str, bool, str]]:
     return out
 
 
-def gcs_objects_exist(required: dict[str, str]) -> list[tuple[str, bool, str]]:
-    """Verifies GCS objects via `gcloud storage ls` (2026-04-17 rule)."""
-    if _resolve("gcloud") is None:
-        return [
-            (
-                "gcloud SDK available",
-                False,
-                "gcloud not on PATH -- install Google Cloud SDK",
-            )
-        ]
-
-    out: list[tuple[str, bool, str]] = []
-    for name, uri in required.items():
-        cp = run(["gcloud", "storage", "ls", uri])
-        expected_leaf = uri.rsplit("/", 1)[-1]
-        ok = cp.returncode == 0 and expected_leaf in cp.stdout
-        if ok:
-            detail = uri
-        else:
-            err = (cp.stderr or cp.stdout).strip().replace("\n", " | ")[:180]
-            detail = f"{uri}: rc={cp.returncode} {err}"
-        out.append((f"GCS exists: {name}", ok, detail))
-    return out
-
-
 def no_tensorflow_in_ensemble() -> tuple[bool, str]:
     path = REPO / "src/genomic_variant_classifier/models/variant_ensemble.py"
     if not path.exists():
@@ -336,11 +310,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip the pytest step (fast iteration during setup).",
     )
-    ap.add_argument(
-        "--skip-gcs",
-        action="store_true",
-        help="Skip GCS checks (offline mode / no gcloud auth).",
-    )
     return ap.parse_args()
 
 
@@ -372,17 +341,6 @@ def main() -> int:
     }
     for r in files_exist(required_files):
         results.append(check(*r))
-
-    # --- Data files (GCS) ---
-    if args.skip_gcs:
-        info("GCS checks skipped", "--skip-gcs flag")
-    else:
-        required_gcs = {
-            "SpliceAI parquet in GCS": "gs://genomic-variant-prod-outputs/data/processed/spliceai_index.parquet",
-            "SpliceAI raw VCF in GCS": "gs://genomic-classifier-data/data/external/spliceai/spliceai_scores.masked.snv.hg38.vcf.gz",
-        }
-        for r in gcs_objects_exist(required_gcs):
-            results.append(check(*r))
 
     # --- Credentials ---
     ok, detail = github_token_available()

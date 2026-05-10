@@ -27,7 +27,6 @@ Integration example (see scripts/run_phase2_eval.py):
     writer.save_shap_values(ensemble, base_probs, meta, top_k=20)
     writer.save_permutation_importance(ensemble, X_tab, X_seq, y)
     writer.save_graph_stats(stats_dict)              # GNN runs only
-    writer.upload_to_gcs(bucket="genomic-variant-prod-outputs")
 """
 
 from __future__ import annotations
@@ -54,8 +53,8 @@ logger = logging.getLogger(__name__)
 class RunArtifactWriter:
     """
     Writes the full artefact set for a single ablation of a single run.
-    All files land under `output_dir/`; `upload_to_gcs()` mirrors that
-    directory into `gs://<bucket>/runs/<run_id>/<ablation>/`.
+    All files land under `output_dir/` (local-only; SCP back to user
+    post-run per INCIDENT_2026-04-29 -- no upload step).
     """
 
     def __init__(
@@ -449,48 +448,6 @@ class RunArtifactWriter:
         logger.info(
             "Ablation results appended: %s rows -> %s", len(merged), master_path
         )
-
-    # ── Upload ─────────────────────────────────────────────────────────────
-
-    def upload_to_gcs(
-        self,
-        bucket: str = "genomic-variant-prod-outputs",
-        gcs_prefix: str = "runs",
-    ) -> None:
-        """
-        Mirror the entire output_dir into
-            gs://<bucket>/<gcs_prefix>/<run_id>/<ablation>/
-
-        Uses `gcloud storage cp --recursive` (gsutil is deprecated per
-        standing rule). Single call at end of run; do not stream uploads
-        during training.
-        """
-        gcloud = shutil.which("gcloud")
-        if not gcloud:
-            logger.error(
-                "gcloud not on PATH; cannot upload. " "Artefacts remain at %s",
-                self.output_dir,
-            )
-            return
-
-        dst_uri = f"gs://{bucket}/{gcs_prefix}/{self.run_id}/{self.ablation}/"
-        logger.info("Uploading %s -> %s", self.output_dir, dst_uri)
-        proc = subprocess.run(
-            [
-                gcloud,
-                "storage",
-                "cp",
-                "--recursive",
-                str(self.output_dir) + "/",
-                dst_uri,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            logger.error("GCS upload failed (rc=%d): %s", proc.returncode, proc.stderr)
-            raise RuntimeError(f"gcs upload failed: {proc.stderr}")
-        logger.info("Upload complete. %d artefacts uploaded.", len(self._artefacts))
 
     # ── Convenience ────────────────────────────────────────────────────────
 

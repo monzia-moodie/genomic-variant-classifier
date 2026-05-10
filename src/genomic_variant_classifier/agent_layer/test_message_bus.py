@@ -62,7 +62,7 @@ def _make_config_stub() -> types.ModuleType:
     cfg.ALPHAMISSENSE_MANIFEST_URL = "https://example.com/alphamissense"
     cfg.SPARK_INGEST_CMD = "echo spark-ingest"
     cfg.CHECKPOINT_DIR = "/tmp/checkpoints"
-    cfg.GCS_CHECKPOINT_PREFIX = "gs://bucket/checkpoints"
+    cfg.GCS_CHECKPOINT_PREFIX = ""  # GCS retired 2026-04-29
     cfg.GCP_PROJECT_ID = "test-project"
     cfg.MODEL_RETRAIN_SCRIPT = "echo retrain"
     cfg.SHAP_REPORT_DIR = "/tmp/shap_reports"
