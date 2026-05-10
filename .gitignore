@@ -19,9 +19,6 @@ env/
 *.token
 
 # Large genomic data files
-genomic_variant_classifier/data/raw/
-genomic_variant_classifier/data/processed/
-genomic_variant_classifier/data/images/
 *.parquet
 *.vcf
 *.vcf.gz
@@ -38,8 +35,6 @@ AlphaMissense_hg38.tsv/
 notebooks/genomic_variant_classifier/
 
 # Model weights (large binaries)
-genomic_variant_classifier/models/*.pt
-genomic_variant_classifier/models/*.pkl
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
@@ -50,13 +45,10 @@ genomic_variant_classifier/models/*.pkl
 Thumbs.db
 
 # VS Code — keep workspace file, ignore personal settings
-.vscode/settings.json
-.vscode/launch.json
 !genomic-variant-classifier.code-workspace
 
 # Logs
 *.log
-genomic_variant_classifier/logs/
 
 # Scratch / temp files
 test_revel_block.py
