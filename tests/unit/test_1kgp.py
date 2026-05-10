@@ -1,5 +1,5 @@
 """
-Unit tests for src/data/connectors/connector_1kgp.py
+Unit tests for src/genomic_variant_classifier/data/connectors/connector_1kgp.py
 
 Run with:
     python -m pytest tests/unit/test_1kgp.py -v --tb=short
@@ -390,13 +390,13 @@ def test_engineer_kgp_features_with_connector(connector: KGPConnector) -> None:
 def test_population_cols_in_tabular_features() -> None:
     """
     Smoke test: verify the 1KGP columns are declared in TABULAR_FEATURES.
-    This test will FAIL until the features are added to src/api/schemas.py —
+    This test will FAIL until the features are added to src/genomic_variant_classifier/api/schemas.py —
     which is the intended behaviour (test-driven integration).
     """
     from genomic_variant_classifier.models.variant_ensemble import TABULAR_FEATURES
     for col in KGPConnector.POPULATION_COLS:
         assert col in TABULAR_FEATURES, (
-            f"{col} is missing from TABULAR_FEATURES in src/api/schemas.py. "
+            f"{col} is missing from TABULAR_FEATURES in src/genomic_variant_classifier/api/schemas.py. "
             f"Add it alongside the other AF features."
         )
 

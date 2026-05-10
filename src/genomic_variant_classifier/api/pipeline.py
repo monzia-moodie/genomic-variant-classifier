@@ -1,5 +1,5 @@
 """
-src/api/pipeline.py
+src/genomic_variant_classifier/api/pipeline.py
 ===================
 Serialisable InferencePipeline that bundles trained base models and a
 stacking meta-learner into a single joblib artifact.
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 INFERENCE_FEATURE_COLUMNS: list[str] = list(TABULAR_FEATURES)
 assert len(INFERENCE_FEATURE_COLUMNS) == 78, (
     f"INFERENCE_FEATURE_COLUMNS has {len(INFERENCE_FEATURE_COLUMNS)} entries; "
-    "expected 74.  Update TABULAR_FEATURES in src/models/variant_ensemble.py."
+    "expected 74.  Update TABULAR_FEATURES in src/genomic_variant_classifier/models/variant_ensemble.py."
 )
 
 
@@ -191,7 +191,7 @@ class InferencePipeline:
         variant : dict
             Raw variant fields.  At minimum supply chrom, pos, ref, alt.
             All other fields default to population-median values when absent
-            (see engineer_features() in src/models/variant_ensemble.py).
+            (see engineer_features() in src/genomic_variant_classifier/models/variant_ensemble.py).
 
         Returns
         -------

@@ -712,7 +712,7 @@ def main() -> int:
     else:
         logger.warning(
             "ensemble has no `oof_predictions_` attribute — apply Patch 1 "
-            "to src/models/variant_ensemble.py (see "
+            "to src/genomic_variant_classifier/models/variant_ensemble.py (see "
             "docs/PATCHES_AND_INTEGRATION.md)."
         )
 

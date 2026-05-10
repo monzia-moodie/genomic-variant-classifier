@@ -1,5 +1,5 @@
 """
-src/training/continual_trainer.py
+src/genomic_variant_classifier/training/continual_trainer.py
 ===================================
 Full continual learning orchestration for the Genomic Variant Classifier.
 

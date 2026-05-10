@@ -1,5 +1,5 @@
 """
-src/data/thousandgenomes.py
+src/genomic_variant_classifier/data/thousandgenomes.py
 ============================
 1000 Genomes Phase 3 allele-frequency fallback connector — Phase 5.1.
 

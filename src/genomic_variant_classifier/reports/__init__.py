@@ -1,5 +1,5 @@
 """
-src/reports
+src/genomic_variant_classifier/reports
 ===========
 Report generation package for the Genomic Variant Classifier.
 

@@ -1,5 +1,5 @@
 """
-src/utils/helpers.py
+src/genomic_variant_classifier/utils/helpers.py
 =====================
 Shared utility functions for the Genomic Variant Classifier pipeline.
 

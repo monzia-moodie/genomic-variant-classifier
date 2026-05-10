@@ -1,5 +1,5 @@
 """
-src/utils
+src/genomic_variant_classifier/utils
 =========
 Shared utility package for the Genomic Variant Classifier.
 

@@ -223,7 +223,7 @@ def main() -> int:
         if args.string_db:
             try:
                 logger.info("[GNN-TRACE] gate-passed: entering GNN block")
-                logger.info("[GNN-TRACE] importing src.models.gnn ...")
+                logger.info("[GNN-TRACE] importing genomic_variant_classifier.models.gnn ...")
                 from genomic_variant_classifier.models.gnn import (
                     GNNScorer,
                     StringDBGraph,

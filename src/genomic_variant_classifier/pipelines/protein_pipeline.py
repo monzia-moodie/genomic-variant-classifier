@@ -1,5 +1,5 @@
 """
-src/pipelines/protein_pipeline.py
+src/genomic_variant_classifier/pipelines/protein_pipeline.py
 ===================================
 Protein structure pipeline — Phase 6.2.
 

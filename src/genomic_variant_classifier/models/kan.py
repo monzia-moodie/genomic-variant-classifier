@@ -1,5 +1,5 @@
 """
-src/models/kan.py
+src/genomic_variant_classifier/models/kan.py
 =================
 KAN (Kolmogorov-Arnold Network) classifier -- Phase 4B.
 

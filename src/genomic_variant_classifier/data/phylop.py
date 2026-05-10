@@ -1,5 +1,5 @@
 """
-src/data/phylop.py
+src/genomic_variant_classifier/data/phylop.py
 ==================
 PhyloP evolutionary conservation score connector.
 Phase 2, Pillar 1, Connector 5.

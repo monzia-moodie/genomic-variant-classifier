@@ -1,5 +1,5 @@
 """
-src/data/spliceai.py
+src/genomic_variant_classifier/data/spliceai.py
 ====================
 SpliceAI pre-computed score connector -- Phase 2, Pillar 1, Connector 2.
  

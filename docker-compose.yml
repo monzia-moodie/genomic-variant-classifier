@@ -96,7 +96,7 @@ services:
       PYTHONPATH: /app
       PYTHONUNBUFFERED: "1"
     command: >
-      /opt/venv/bin/uvicorn src.api.main:app
+      /opt/venv/bin/uvicorn genomic_variant_classifier.api.main:app
         --host 0.0.0.0 --port 8000 --reload
     profiles:
       - dev                     # only starts with: docker compose --profile dev up

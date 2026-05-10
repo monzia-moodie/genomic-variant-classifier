@@ -38,10 +38,10 @@ A production-grade, multi-modal genomic variant pathogenicity classifier that:
 | Calibration analysis (scripts/calibration_analysis.py)                | **Done**                  |
 | METHODS.md (publication-ready methods section)                         | **Done**                  |
 | dbSNP index parquet (2.87M ClinVar-matched rs-IDs)                     | **Done**                  |
-| ESM-2 connector (src/data/esm2.py)                                     | **Done -- ready for retrain** |
-| MC Dropout / Deep Ensemble uncertainty (src/models/mc_dropout.py)      | **Done**                  |
-| KAN classifier (src/models/kan.py)                                     | **Done**                  |
-| Algorithm benchmark framework (src/evaluation/benchmark.py)            | **Done**                  |
+| ESM-2 connector (src/genomic_variant_classifier/data/esm2.py)                                     | **Done -- ready for retrain** |
+| MC Dropout / Deep Ensemble uncertainty (src/genomic_variant_classifier/models/mc_dropout.py)      | **Done**                  |
+| KAN classifier (src/genomic_variant_classifier/models/kan.py)                                     | **Done**                  |
+| Algorithm benchmark framework (src/genomic_variant_classifier/evaluation/benchmark.py)            | **Done**                  |
 | Model retrain incorporating Phase 4 features                           | Pending data + compute    |
 
 ---
@@ -52,7 +52,7 @@ A production-grade, multi-modal genomic variant pathogenicity classifier that:
 
 ### 4A -- ESM-2 Sequence Embeddings
 
-- [x] `src/data/esm2.py` connector -- HuggingFace transformers backend, SQLite cache
+- [x] `src/genomic_variant_classifier/data/esm2.py` connector -- HuggingFace transformers backend, SQLite cache
 - [x] `esm2_delta_norm` added to `PHASE_4_FEATURES` (ready for next retrain)
 - [ ] Install `transformers torch` in training environment and run annotation
 - [ ] Retrain ensemble with 65-feature set; measure AUROC lift (+0.03-0.06 expected)
@@ -62,7 +62,7 @@ Install: `pip install transformers torch`
 
 ### 4B -- KAN (Kolmogorov-Arnold Network)
 
-- [x] `src/models/kan.py` -- pykan / efficient-kan backends; MLP fallback
+- [x] `src/genomic_variant_classifier/models/kan.py` -- pykan / efficient-kan backends; MLP fallback
 - [x] sklearn-compatible interface; `plot_edge_functions()` for interpretability
 - [ ] Run in benchmark framework; compare OOF AUROC against MLP
 
@@ -70,7 +70,7 @@ Install: `pip install pykan`
 
 ### 4C -- Bayesian Uncertainty Quantification
 
-- [x] `src/models/mc_dropout.py` -- MCDropoutWrapper + DeepEnsembleWrapper
+- [x] `src/genomic_variant_classifier/models/mc_dropout.py` -- MCDropoutWrapper + DeepEnsembleWrapper
 - [x] Uncertainty decomposition: epistemic (variance) + aleatoric (entropy)
 - [x] `annotate_uncertainty()` helper for DataFrame annotation
 - [ ] Run DeepEnsembleWrapper(LightGBM, n_members=5) on holdout; measure ECE improvement
@@ -78,13 +78,13 @@ Install: `pip install pykan`
 
 ### 4D -- GNN over Protein-Protein Interaction Network
 
-- [x] `src/models/gnn.py` -- GAT convolutions over STRING DB graph
+- [x] `src/genomic_variant_classifier/models/gnn.py` -- GAT convolutions over STRING DB graph
 - [ ] Wire STRING DB edge weights into GNN training (currently uses uniform weights)
 - [ ] Late fusion: concat GNN gene embedding with TABULAR_FEATURES before stacking
 
 ### 4E -- Algorithm Comparison Framework
 
-- [x] `src/evaluation/benchmark.py` -- cross-validated benchmark across all families
+- [x] `src/genomic_variant_classifier/evaluation/benchmark.py` -- cross-validated benchmark across all families
 - [x] Metrics: AUROC, AUPRC, Brier, ECE, train time, inference latency, memory
 - [ ] Run full benchmark on ClinVar holdout
 - [ ] Produce comparison table for METHODS.md / manuscript
@@ -92,7 +92,7 @@ Install: `pip install pykan`
 Run:
 
 ```bash
-python -m src.evaluation.benchmark \
+python -m genomic_variant_classifier.evaluation.benchmark \
     --parquet data/processed/clinvar_grch38.parquet \
     --output  outputs/benchmark \
     --n-folds 5
@@ -145,7 +145,7 @@ Apply for these in parallel -- each takes 2-8 weeks for approval.
 ## Feature Roadmap
 
 **Live (64 features -- current model):**
-see `TABULAR_FEATURES` in `src/models/variant_ensemble.py`
+see `TABULAR_FEATURES` in `src/genomic_variant_classifier/models/variant_ensemble.py`
 
 **PHASE_4_FEATURES (pending retrain):**
 

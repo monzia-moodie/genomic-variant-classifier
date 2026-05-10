@@ -1,5 +1,5 @@
 """
-src/models/mc_dropout.py
+src/genomic_variant_classifier/models/mc_dropout.py
 ========================
 MC Dropout / Deep Ensemble uncertainty wrapper -- Phase 4C.
 

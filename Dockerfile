@@ -7,7 +7,7 @@
 #   - Produces a virtualenv at /opt/venv
 #
 # Stage 2: api  (default target)
-#   - Copies only the inference virtualenv and src/api + src/models
+#   - Copies only the inference virtualenv and src/genomic_variant_classifier/api + src/genomic_variant_classifier/models
 #   - No PySpark, no TensorFlow unless NNs are included
 #   - ~1.2 GB final image
 #

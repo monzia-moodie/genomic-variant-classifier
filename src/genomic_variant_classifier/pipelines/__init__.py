@@ -1,5 +1,5 @@
 """
-src/pipelines/
+src/genomic_variant_classifier/pipelines/
 ==============
 Parallel classification tracks that feed additional features into the
 main tabular feature matrix.

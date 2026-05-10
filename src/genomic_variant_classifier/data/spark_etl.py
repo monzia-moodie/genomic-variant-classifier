@@ -22,9 +22,9 @@ CHANGES FROM PHASE 1:
     (Spark's regexp_extract returns "" not null on no-match).
 
 Run locally:
-    python -m src.data.spark_etl
+    python -m genomic_variant_classifier.data.spark_etl
 Or via CLI:
-    spark-submit src/data/spark_etl.py
+    spark-submit src/genomic_variant_classifier/data/spark_etl.py
 """
 
 from __future__ import annotations

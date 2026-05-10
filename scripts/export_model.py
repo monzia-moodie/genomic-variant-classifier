@@ -9,7 +9,7 @@ What this script does
 1. Locates the best trained ``VariantEnsemble`` (or an ensemble subset
    from a run_phase2_eval.py output directory).
 2. Wraps it with the fitted ``StandardScaler`` and feature list in a
-   ``src.api.pipeline.InferencePipeline`` instance.
+   ``genomic_variant_classifier.api.pipeline.InferencePipeline`` instance.
 3. Optionally excludes large base models (``--exclude-models``) to reduce
    artefact size without significant AUROC loss.
 4. Writes the artefact to ``--output`` (default: models/phase2_pipeline.joblib).

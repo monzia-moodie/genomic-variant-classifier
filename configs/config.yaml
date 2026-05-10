@@ -4,7 +4,7 @@ project:
   base_dir: genomic_variant_classifier
 
  # ---------------------------------------------------------------------------
-# Data directory — resolved at runtime by src/utils/helpers.resolve_data_dir()
+# Data directory — resolved at runtime by src/genomic_variant_classifier/utils/helpers.resolve_data_dir()
 # The value here is only used as a fallback if env-var and auto-detection fail.
 # VS Code: set GENOMIC_DATA_DIR in .env
 # Colab:   auto-detected from /content/drive/MyDrive/

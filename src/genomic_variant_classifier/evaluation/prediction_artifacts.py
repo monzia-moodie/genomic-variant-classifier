@@ -1,5 +1,5 @@
 """
-src/evaluation/prediction_artifacts.py
+src/genomic_variant_classifier/evaluation/prediction_artifacts.py
 =======================================
 RunArtifactWriter — one-stop shop for emitting the full artefact set
 defined in docs/RUN9_SCIENTIFIC_DESIGN.md §Rule 5.

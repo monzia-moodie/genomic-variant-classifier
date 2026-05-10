@@ -5,10 +5,10 @@ Unit tests for the Phase 3 REST API layer.
 
 Coverage
 --------
-  src/api/schemas.py           → VariantRequest validation, score_to_classification
-  src/models/variant_ensemble  → engineer_features, TABULAR_FEATURES
-  src/api/pipeline.py          → InferencePipeline.predict_single / predict_batch
-  src/api/main.py              → /health, /info, /predict, /batch endpoints
+  src/genomic_variant_classifier/api/schemas.py           → VariantRequest validation, score_to_classification
+  src/genomic_variant_classifier/models/variant_ensemble  → engineer_features, TABULAR_FEATURES
+  src/genomic_variant_classifier/api/pipeline.py          → InferencePipeline.predict_single / predict_batch
+  src/genomic_variant_classifier/api/main.py              → /health, /info, /predict, /batch endpoints
 
 Run with:
     pytest tests/unit/test_api.py -v --tb=short
@@ -260,7 +260,7 @@ class TestScoreToClassification:
 # ---------------------------------------------------------------------------
 
 class TestEngineerFeatures:
-    """Tests for engineer_features() in src.models.variant_ensemble."""
+    """Tests for engineer_features() in genomic_variant_classifier.models.variant_ensemble."""
 
     def test_output_columns_match_tabular_features(self):
         from genomic_variant_classifier.models.variant_ensemble import engineer_features, TABULAR_FEATURES

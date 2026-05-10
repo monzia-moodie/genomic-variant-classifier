@@ -1,5 +1,5 @@
 """
-src/evaluation/benchmark.py
+src/genomic_variant_classifier/evaluation/benchmark.py
 ============================
 Algorithm comparison framework -- Phase 4F.
 
@@ -22,7 +22,7 @@ Supported model families
 
 Usage (script)
 --------------
-  python -m src.evaluation.benchmark \\
+  python -m genomic_variant_classifier.evaluation.benchmark \\
       --parquet data/processed/clinvar_grch38.parquet \\
       --output  outputs/benchmark \\
       --n-folds 5

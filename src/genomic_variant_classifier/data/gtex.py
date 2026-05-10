@@ -1,5 +1,5 @@
 """
-src/data/gtex.py
+src/genomic_variant_classifier/data/gtex.py
 =================
 GTEx (Genotype-Tissue Expression) database connector — Phase 2, Pillar 1.
  

@@ -1,5 +1,5 @@
 """
-src/data/lovd.py
+src/genomic_variant_classifier/data/lovd.py
 ================
 LOVDConnector — annotates variants with LOVD classification scores.
 

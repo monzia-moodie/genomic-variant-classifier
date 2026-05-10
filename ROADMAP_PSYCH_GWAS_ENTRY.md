@@ -60,7 +60,7 @@ evidence at ingestion time.
 ### Planned Feature Schema (5 new features)
 
 ```python
-# connector: src/data/database_connectors.py — PsychGWASConnector
+# connector: src/genomic_variant_classifier/data/database_connectors.py — PsychGWASConnector
 # DEFAULT_SCORE = 0.0 (no signal — correct default for rare pathogenic variants)
 
 gwas_psych_min_pval           # min p-value across all 52 studies

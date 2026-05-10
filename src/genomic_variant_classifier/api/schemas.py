@@ -1,5 +1,5 @@
 """
-src/api/schemas.py
+src/genomic_variant_classifier/api/schemas.py
 ==================
 Pydantic request / response schemas for the variant pathogenicity API.
 

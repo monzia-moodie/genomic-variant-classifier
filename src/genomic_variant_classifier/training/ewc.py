@@ -1,5 +1,5 @@
 """
-src/training/ewc.py
+src/genomic_variant_classifier/training/ewc.py
 ====================
 Elastic Weight Consolidation (EWC) for continual learning.
 

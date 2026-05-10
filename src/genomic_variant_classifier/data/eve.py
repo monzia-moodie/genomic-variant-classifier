@@ -1,5 +1,5 @@
 """
-src/data/eve.py
+src/genomic_variant_classifier/data/eve.py
 ===============
 EVE evolutionary model connector — Phase 4, Connector 5.
 

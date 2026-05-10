@@ -1,5 +1,5 @@
 """
-src/data/revel.py
+src/genomic_variant_classifier/data/revel.py
 =================
 REVEL (Rare Exome Variant Ensemble Learner) connector.
  

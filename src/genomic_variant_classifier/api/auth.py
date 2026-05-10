@@ -1,5 +1,5 @@
 """
-src/api/auth.py
+src/genomic_variant_classifier/api/auth.py
 ===============
 API key authentication for the variant pathogenicity API.
 

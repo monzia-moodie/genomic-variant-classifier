@@ -1,7 +1,7 @@
 """
 tests/unit/test_splits.py
 ==========================
-Invariant tests for src/data/splits.py. Run with:
+Invariant tests for src/genomic_variant_classifier/data/splits.py. Run with:
 
     pytest tests/unit/test_splits.py -v
 

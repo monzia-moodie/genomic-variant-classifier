@@ -56,7 +56,7 @@ def _has_network() -> bool:
 
 @pytest.fixture
 def esm2_connector():
-    """Instantiate ESM2Connector from src/data/esm2.py (confirmed
+    """Instantiate ESM2Connector from src/genomic_variant_classifier/data/esm2.py (confirmed
     2026-04-17)."""
     from genomic_variant_classifier.data.esm2 import ESM2Connector
 

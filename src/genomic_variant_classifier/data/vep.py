@@ -1,5 +1,5 @@
 """
-src/data/vep.py
+src/genomic_variant_classifier/data/vep.py
 ===============
 VEP codon_position connector — Phase 4, Connector 1.
 

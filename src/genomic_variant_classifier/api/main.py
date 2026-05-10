@@ -1,5 +1,5 @@
 """
-src/api/main.py
+src/genomic_variant_classifier/api/main.py
 ===============
 FastAPI REST API for the Genomic Variant Pathogenicity Classifier.
 
@@ -15,10 +15,10 @@ Endpoints
 Usage
 -----
   # Development
-  uvicorn src.api.main:app --reload --port 8000
+  uvicorn genomic_variant_classifier.api.main:app --reload --port 8000
 
   # Production (inside Docker)
-  gunicorn src.api.main:app -k uvicorn.workers.UvicornWorker \
+  gunicorn genomic_variant_classifier.api.main:app -k uvicorn.workers.UvicornWorker \
       --bind 0.0.0.0:8000 --workers 2
 
 Environment variables
@@ -44,7 +44,7 @@ Implementation notes
   singleton.  Concurrent requests share it read-only (joblib artifacts are
   thread-safe after load).
 * Feature engineering is delegated to the InferencePipeline wrapper
-  (``src/api/pipeline.py``), which replicates the 64-feature logic from
+  (``src/genomic_variant_classifier/api/pipeline.py``), which replicates the 64-feature logic from
   ``DataPrepPipeline._engineer_features`` without any I/O side-effects.
 * Auth is HTTPBearer.  When VALID_API_KEYS is empty, all requests are
   allowed (development mode).  /health is always public.
@@ -88,7 +88,7 @@ from genomic_variant_classifier.api.schemas import (
 )
 
 # ---------------------------------------------------------------------------
-# NOTE: Auth dependency is in src/api/auth.py (X-API-Key header, API_KEYS env var)
+# NOTE: Auth dependency is in src/genomic_variant_classifier/api/auth.py (X-API-Key header, API_KEYS env var)
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------

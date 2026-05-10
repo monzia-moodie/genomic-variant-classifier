@@ -1,5 +1,5 @@
 """
-src/data/clingen.py
+src/genomic_variant_classifier/data/clingen.py
 ===================
 ClinGen Gene Validity connector — Phase 4, Connector 3.
 

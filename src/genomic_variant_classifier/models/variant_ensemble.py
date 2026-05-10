@@ -276,7 +276,7 @@ class EnsembleConfig:
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Derive the 65 tabular features from a raw variant DataFrame.
-    Mirrors DataPrepPipeline._engineer_features() in src/data/real_data_prep.py.
+    Mirrors DataPrepPipeline._engineer_features() in src/genomic_variant_classifier/data/real_data_prep.py.
     All missing columns are filled with safe defaults.
     """
     feats = pd.DataFrame(index=df.index)

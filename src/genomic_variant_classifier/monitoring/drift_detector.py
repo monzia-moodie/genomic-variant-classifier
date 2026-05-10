@@ -1,5 +1,5 @@
 """
-src/monitoring/drift_detector.py
+src/genomic_variant_classifier/monitoring/drift_detector.py
 =================================
 Comprehensive data drift detection for the Genomic Variant Classifier.
 

@@ -51,14 +51,14 @@ Usage
 
 Integration with engineer_features()
 -------------------------------------
-Add to TABULAR_FEATURES in src/api/schemas.py:
+Add to TABULAR_FEATURES in src/genomic_variant_classifier/api/schemas.py:
     "af_1kg_afr", "af_1kg_eur", "af_1kg_eas", "af_1kg_sas", "af_1kg_amr"
 
-Add to engineer_features() in src/api/pipeline.py:
+Add to engineer_features() in src/genomic_variant_classifier/api/pipeline.py:
     for col in KGPConnector.POPULATION_COLS:
         row[col] = float(request_dict.get(col) or 0.0)
 
-Add to VariantRequest in src/api/schemas.py:
+Add to VariantRequest in src/genomic_variant_classifier/api/schemas.py:
     af_1kg_afr: float | None = None
     af_1kg_eur: float | None = None
     af_1kg_eas: float | None = None
@@ -483,7 +483,7 @@ def engineer_kgp_features(
     """
     Extract 1KGP population AF features from a single variant request dict.
 
-    Called inside engineer_features() in src/api/pipeline.py.  If the
+    Called inside engineer_features() in src/genomic_variant_classifier/api/pipeline.py.  If the
     request already contains pre-computed af_1kg_* values (e.g. submitted
     by a client that looked them up), those values are passed through
     directly.  Otherwise the connector is queried.

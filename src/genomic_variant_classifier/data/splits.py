@@ -1,5 +1,5 @@
 """
-src/data/splits.py
+src/genomic_variant_classifier/data/splits.py
 ===================
 Deterministic train/val/test splitters for the variant-pathogenicity pipeline.
 

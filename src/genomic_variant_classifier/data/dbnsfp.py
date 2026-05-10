@@ -1,5 +1,5 @@
 """
-src/data/dbnsfp.py
+src/genomic_variant_classifier/data/dbnsfp.py
 ==================
 Connector 7: dbNSFP full-width score annotator.
 

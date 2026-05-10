@@ -1,5 +1,5 @@
 """
-src/models/catboost_wrapper.py
+src/genomic_variant_classifier/models/catboost_wrapper.py
 ================================
 Sklearn-compatible CatBoost wrapper for the genomic variant ensemble.
 

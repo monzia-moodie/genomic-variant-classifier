@@ -1,5 +1,5 @@
 """
-src/data/cadd.py
+src/genomic_variant_classifier/data/cadd.py
 =================
 CADD (Combined Annotation Dependent Depletion) REST API connector.
 Phase 2, Pillar 1, Connector 3.

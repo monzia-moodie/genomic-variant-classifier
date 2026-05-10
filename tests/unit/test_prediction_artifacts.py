@@ -1,7 +1,7 @@
 """
 tests/unit/test_prediction_artifacts.py
 ========================================
-Tests for src/evaluation/prediction_artifacts.py.
+Tests for src/genomic_variant_classifier/evaluation/prediction_artifacts.py.
 
 Focuses on the atomic-write, manifest-schema, and idempotency guarantees
 that Rule 5 depends on. No GCS upload is exercised here; that's an

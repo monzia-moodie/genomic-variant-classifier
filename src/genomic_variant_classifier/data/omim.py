@@ -1,5 +1,5 @@
 """
-src/data/omim.py
+src/genomic_variant_classifier/data/omim.py
 ================
 OMIM gene-disease connector — Phase 4, Connector 2.
 

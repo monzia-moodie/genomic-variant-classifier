@@ -1,5 +1,5 @@
 """
-src/pipelines/rna_pipeline.py
+src/genomic_variant_classifier/pipelines/rna_pipeline.py
 ==============================
 RNA splice-isoform pipeline — Phase 6.1.
 

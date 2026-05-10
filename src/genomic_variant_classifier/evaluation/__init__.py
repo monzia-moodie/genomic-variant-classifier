@@ -1,5 +1,5 @@
 """
-src/evaluation
+src/genomic_variant_classifier/evaluation
 ==============
 Clinical evaluation package for the Genomic Variant Classifier.
 """

@@ -1,5 +1,5 @@
 """
-src/data/hgmd.py
+src/genomic_variant_classifier/data/hgmd.py
 ================
 HGMD connector — Phase 4, Connector 6.
 

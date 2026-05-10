@@ -1,5 +1,5 @@
 """
-src/data/esm2.py
+src/genomic_variant_classifier/data/esm2.py
 ================
 ESM-2 protein language model connector -- Phase 4A.
 

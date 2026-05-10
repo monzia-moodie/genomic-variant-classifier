@@ -1,5 +1,5 @@
 """
-src/data/sift_polyphen.py
+src/genomic_variant_classifier/data/sift_polyphen.py
 =========================
 Connector 6: SIFT + PolyPhen-2 annotation from dbNSFP.
 

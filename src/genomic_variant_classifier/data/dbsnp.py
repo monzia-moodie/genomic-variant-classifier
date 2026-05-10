@@ -1,5 +1,5 @@
 """
-src/data/dbsnp.py
+src/genomic_variant_classifier/data/dbsnp.py
 =================
 dbSNP allele frequency supplement connector — Phase 4, Connector 4.
 

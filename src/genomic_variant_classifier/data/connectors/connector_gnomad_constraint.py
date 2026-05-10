@@ -1,5 +1,5 @@
 """
-src/data/connectors/connector_gnomad_constraint.py
+src/genomic_variant_classifier/data/connectors/connector_gnomad_constraint.py
 ====================================================
 gnomAD v4.1 gene constraint connector.
 

@@ -1,5 +1,5 @@
 """
-src/data/alphamissense.py
+src/genomic_variant_classifier/data/alphamissense.py
 ==========================
 AlphaMissense pre-computed score connector -- Phase 2, Pillar 1.
 
