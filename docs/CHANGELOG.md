@@ -856,3 +856,41 @@ Docker build smoke test).
 - Operational tooling (in `agent_data/`, NOT in repo):
   `c4_fix_install_compat.py`, `c4_diagnose_walk.py`, `c4_fix_bare_imports.py`,
   `c4_batch_C36_through_4.ps1`, `c4_batch_commits.ps1`
+
+
+## 2026-05-09 (continuation) — C5 layout-migration cleanup
+
+### Attempted
+- C5.1: rewrite stale `src/X` refs in README L196/L223, ci.yml L77, narrow .gitignore cleanup
+- C5.2: rewrite stale `src.*` / `src/` refs in 7 active operational docs
+- C5.3 discovery: full-repo audit (369 hits across 71 files)
+- C5.3a v1: full-repo sweep of 55 files / 83 expected substitutions (Bucket 3)
+- C5.3a v2: same scope after regex fix
+- C5.3b: remove 8 stale `.gitignore` rules
+
+### Failed
+- **C5.3a v1** (Stage 3, no commit, recovered): post-apply stale-ref count 9 ≠ 4 expected. Path-style regex `src/(SUBPKG)/` required trailing slash; missed 5 line-level hits where slash was absent (`src/api + src/models` in Dockerfile L10, bare `src/evaluation`/`src/reports`/`src/utils` at end of L2 in three `__init__.py` files, bare `src/` in `test_1kgp.py` L409). Working tree dirty with 51 partial writes; recovered via `git checkout -- .`.
+
+### Fixed
+- **C5.3a v2:** loosened path-style regex to `src/(SUBPKG)(?![A-Za-z0-9_])` (word-boundary lookahead instead of required slash). Catches all 5 v1-missed hits except bare-`src/` in test_1kgp.py L409 (intentional incidental).
+- **Stage 1 arithmetic-sanity check** added to v2 batch: parses helper output and asserts `actual_substitutions == baseline_lines - deliberate_skip_lines - incidental_lines + multi_match_extras` (C5.3a v2: `83 == 87 - 4 - 1 + 1`, where `+1` is Dockerfile L10's multi-match adjustment) BEFORE Stage 2 apply. Catches the v1 class of regex-undershoot at dry-run time. See SESSION_2026-05-09_C5.md §Lesson 1 for the full term-by-term derivation.
+
+### Learned
+- **STANDING RULE — apply-batch arithmetic sanity:** every mechanical-rewrite batch must assert at Stage 1 (dry-run) that `actual_substitutions == expected_substitutions`, where `expected = baseline_lines - deliberate_skip_lines - incidental_lines + multi_match_extras` (the last term reconciles match-count vs line-count: each non-skipped line with N>1 matches contributes N-1 extras). Without this check, a too-strict regex undershoots silently; the failure surfaces only at Stage 3 post-apply verification, after partial writes. Codify in every future apply helper template.
+- **Path-style regex form:** `src/(SUBPKG)(?![A-Za-z0-9_])` (word-boundary lookahead) is more robust than `src/(SUBPKG)/` (required slash).
+- **Recovery enforced by pre-flight:** apply batches' pre-flight rejects dirty working trees, ensuring `git checkout -- .` recovery happens before any retry.
+- **Substitutions ≠ line-level diff:** helper substitution count and git diff stat can differ when a single line has multiple substitutions (Dockerfile L10: 2 substitutions, +1/-1 in diff).
+
+### Commits
+- `d7ed38e` — C5.1
+- `4eb1205` — C5.2
+- `6a38ee3` — C5.3a (v2): 55 files, 83 substitutions, +82/-82
+- `6443af7` — C5.3b: 8 .gitignore deletions
+
+### Refs
+- `agent_data/c5_3_discovery.ps1`
+- `agent_data/c5_3a_apply_full_sweep.py` (v2)
+- `agent_data/c5_3a_batch.ps1` (v2 with Stage 1 arithmetic-sanity)
+- `agent_data/c5_3b_apply_gitignore_cleanup.py`
+- `agent_data/c5_3b_batch.ps1`
+- Session doc: `docs/sessions/SESSION_2026-05-09_C5.md`
