@@ -64,10 +64,11 @@ python scripts\preflight_check.py --skip-pytest
 echo "exit: $LASTEXITCODE"
 ```
 
-**Expected**: the "cannot find the path specified" errors for `git status`,
-`git fetch`, `gcloud storage ls` are gone. Remaining FAILs are allowed to
-be about GCS auth (`gcloud auth login` fixes them) or about session work
-being uncommitted (expected mid-session).
+**Expected**: the "cannot find the path specified" errors for `git status`
+and `git fetch` are gone. Remaining FAILs are allowed to be about session
+work being uncommitted (expected mid-session). GCS checks were removed
+in INCIDENT_2026-04-29 cleanup; only the SpliceAI cache check remains
+as a known blocker.
 
 ---
 
@@ -262,14 +263,11 @@ python -m pytest -q --tb=short 2>&1 | Select-Object -Last 20
 # 7c. Full preflight (includes the pytest step — ~10 min)
 python scripts\preflight_check.py
 echo "exit: $LASTEXITCODE"
-# Expected exit: 0, OR only FAILs are transient (e.g. GCS auth, fixable
-# with `gcloud auth login`).
+# Expected exit: 0, or only the SpliceAI cache FAIL (blocker (b)).
 
-# 7d. Confirm GCS auth (required for upload_to_gcs() at run end)
-gcloud auth list
-gcloud config get-value project
-# Expected: active account + project=genomic-variant-prod
-# If not: gcloud auth login; gcloud config set project genomic-variant-prod
+# 7d. SCP key check (required for outputs-back at run end, INCIDENT_2026-04-29)
+Test-Path -LiteralPath "$env:USERPROFILE\.ssh\id_lambda_run8"
+# Expected: True (key exists). SSH config not validated here; tested by actual scp.
 
 # 7e. Ablation harness 10 % integration smoke
 python scripts\run_phase2_eval.py `
@@ -300,19 +298,20 @@ command sequence. Key reminders:
   the whole lot.
 - Run `predict_vus.py` after training finishes (zero GPU) to produce the
   ranked VUS parquet.
-- Upload all of `runs/run9/` in a single `gcloud storage cp --recursive`
-  call at the end, then immediately `sudo shutdown -h now` (or let the
-  trap handle it).
+- SCP all of `runs/run9/` back to local in a single `scp -r` call from
+  the local Windows box, then `sudo shutdown -h now` on the VM
+  (INCIDENT_2026-04-29).
 
 ---
 
 ## Step 9 — Post-run documentation (Rule 8)
 
-After Run 9 completes and artefacts are in GCS:
+After Run 9 completes and artefacts have been SCP'd back locally:
 
 ```powershell
-# 9a. Pull artefacts locally
-gcloud storage cp --recursive gs://genomic-variant-prod-outputs/runs/run9 runs\
+# 9a. (Already done in shutdown sequence; SCP-only per INCIDENT_2026-04-29.)
+#     Verify local presence:
+Get-ChildItem -LiteralPath runs\run9 -Recurse | Measure-Object Length -Sum
 
 # 9b. Auto-generate the report skeleton (when generate_run_report.py exists;
 #     T7 task — may be deferred if manually writing Run 9's first report).
@@ -340,9 +339,9 @@ Either:
 - **Success**: all eight Run-9 exit criteria in `docs/RUN9_SCIENTIFIC_DESIGN.md`
   §8 are checked. Close the session, set Run 10 milestone to "HGVSp parser".
 - **Failure**: write `docs/incidents/INCIDENT_<date>_run9-<slug>.md` with
-  root cause, `gcloud storage ls` receipts, and the specific next step that
-  would prevent recurrence. Run 10 does not launch until the incident is
-  resolved.
+  root cause, local-disk receipts of SCP'd artefacts (INCIDENT_2026-04-29:
+  GCS retired), and the specific next step that would prevent recurrence.
+  Run 10 does not launch until the incident is resolved.
 
 A run that reports AUROC but lacks the ablation decomposition, SHAP, and
 VUS ranking is a *partial* run, not a successful one. Flag it as such in

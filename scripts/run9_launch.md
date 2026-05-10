@@ -24,8 +24,6 @@ echo "preflight exit: $LASTEXITCODE"
 
 # Fast iteration mode (skips the 5-10 min pytest):
 #   python scripts\preflight_check.py --skip-pytest
-# Offline mode (no gcloud auth):
-#   python scripts\preflight_check.py --skip-gcs
 ```
 
 **Do not proceed if exit code is non-zero.** Fix every FAIL line before
@@ -55,12 +53,13 @@ git clone https://${GITHUB_TOKEN}@github.com/monzia-moodie-repo-projects/genomic
 cd genomic-variant-classifier
 git log -1 --oneline   # confirm HEAD matches what you committed
 
-# 2. Pull data from GCS (gcloud should be pre-auth'd on the instance
-#    image; if not, `gcloud auth login` then re-run)
+# 2. Verify data is pre-staged via SCP from local Windows box.
+#    SCP-only architecture per INCIDENT_2026-04-29 (GCS retired).
+#    User SCPs ~1-2 GB of input data from local before launching this VM.
 mkdir -p data/external/spliceai data/external/string data/external/alphamissense data/raw/clinvar
-gcloud storage cp gs://genomic-variant-prod-outputs/data/processed/spliceai_index.parquet data/external/spliceai/
-gcloud storage cp gs://genomic-classifier-data/data/external/string/9606.protein.links.detailed.v12.0.txt.gz data/external/string/
-gcloud storage cp gs://genomic-classifier-data/data/external/string/9606.protein.info.v12.0.txt.gz data/external/string/
+ls -lh data/external/spliceai/spliceai_index.parquet  # expect ~336 MB
+ls -lh data/external/string/9606.protein.links.detailed.v12.0.txt.gz
+ls -lh data/external/string/9606.protein.info.v12.0.txt.gz
 # ... (ClinVar, AlphaMissense, dbNSFP, etc. per your Run 8 setup)
 
 # 3. Install requirements. Pin transformers<5 based on local testing --
@@ -141,15 +140,17 @@ print(f'esm2_delta_norm: n={len(d)} zero_frac={(d==0).mean():.4f} '
 
 ## Shutdown -- the moment you see final metrics
 
-1. **Save outputs to GCS** (do this before destroying):
-   ```bash
-   gcloud storage cp -r /workspace/outputs/run9 gs://genomic-variant-prod-outputs/run9/
-   gcloud storage cp logs/run9.log gs://genomic-variant-prod-outputs/run9/logs/
+1. **SCP outputs back to local** (do this before destroying):
+   ```powershell
+   # Run on local Windows box; SSH key per INCIDENT_2026-04-29
+   $KEY = "$env:USERPROFILE\.ssh\id_lambda_run8"
+   scp -i $KEY -r vastuser@<vast-host>:/workspace/outputs/run9 outputs\
+   scp -i $KEY vastuser@<vast-host>:/workspace/logs/run9.log logs\
    ```
 
-2. **Verify the GCS upload landed** (2026-04-17 INCIDENT-verification rule):
-   ```bash
-   gcloud storage ls -l gs://genomic-variant-prod-outputs/run9/
+2. **Verify local landing** (INCIDENT_2026-04-29 supersedes 2026-04-17 GCS rule):
+   ```powershell
+   Get-ChildItem -LiteralPath outputs\run9 -Recurse | Measure-Object Length -Sum
    # Paste this output into the session doc.
    ```
 
@@ -173,7 +174,7 @@ After shutdown:
      importance rank (should be at or near 0)
    - SpliceAI feature importance rank
    - total GPU cost and wall time
-   - gcloud storage ls receipt showing Run 9 outputs in GCS
+   - local file listing receipt showing Run 9 outputs SCP'd back (INCIDENT_2026-04-29)
 
 2. Append to `docs/CHANGELOG.md` under `## YYYY-MM-DD --- Run 9`.
 
@@ -194,8 +195,8 @@ If training crashes or a feature (other than ESM-2) is silently zero:
 3. Write `docs/incidents/INCIDENT_YYYY-MM-DD_run9-<slug>.md` with:
    - exact error
    - root cause (if determined) or "unknown, see logs"
-   - the gcloud storage ls confirmation that relevant GCS files exist
+   - local-disk listing confirming relevant artefacts SCP'd back to local
    - the plan to fix before Run 10
 
-The 2026-04-17 INCIDENT-verification standing rule applies: no
-"RESOLVED" without a gcloud storage ls receipt.
+The verification rule (updated by INCIDENT_2026-04-29 to SCP-only): no
+"RESOLVED" without a local-disk listing receipt.

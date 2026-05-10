@@ -53,7 +53,7 @@ for any future run.
 | Working tree | clean modulo two allowlisted carry-overs | `scripts/gcp_run6_startup.sh`, `ROADMAP_PSYCH_GWAS_ENTRY.md` |
 | Tests | 466 passing, 3 skipped, 0 failed | from end of prior session |
 | Local SpliceAI parquet | present, 336.8 MB | `data/external/spliceai/spliceai_index.parquet` |
-| GCS SpliceAI parquet | present (confirmed via `gcloud storage ls` in prior session) | same path |
+| GCS SpliceAI parquet | REMOVED (INCIDENT_2026-04-29 GCS retirement) | data SCP'd local-only |
 | SpliceAI test cache | deleted locally, regenerates on full pytest | fixture-scope gap |
 | STRING DB cache | fixed in commit `0a02e5d` | but never actually exercised on GPU in Run 8 |
 | ESM-2 connector | `src/genomic_variant_classifier/data/esm2.py`, `transformers`-backed, scalar output `esm2_delta_norm` | **silent zero** in Runs 6/7/8 |
@@ -336,13 +336,12 @@ writer.save_shap_values(shap_df)                             # per-variant top-K
 writer.save_calibration(per_consequence_calibration_df)
 writer.save_feature_importance(permutation_importance_df)
 writer.save_graph_stats(gnn_graph_stats_dict)                # JSON
-writer.upload_to_gcs()                                       # atomic via .tmp suffix
+# upload_to_gcs() removed in Commit 2 of cleanup arc (INCIDENT_2026-04-29)
 ```
 
-Design rules: every write is local-first, then a single final
-`upload_to_gcs()` call at shutdown so the VM can be destroyed the instant
-the upload completes. Uses `gcloud storage cp --recursive` (not the
-deprecated `gsutil` per the standing rule).
+Design rules: every write is local-first; at shutdown, user SCPs the
+entire `outputs/run9/` directory back to the local Windows box, then
+destroys the Vast.ai instance. INCIDENT_2026-04-29 retired GCS.
 
 Starter code delivered alongside this doc.
 
@@ -426,7 +425,7 @@ python -m pytest tests\unit\test_splits.py -v
 # A6. Preflight, with --skip-pytest because we just ran it
 python scripts\preflight_check.py --skip-pytest
 echo "preflight exit: $LASTEXITCODE"
-# Expected: exit 0 or only FAIL is "GCS auth" (refresh with gcloud auth login)
+# Expected: exit 0 (or only the SpliceAI cache FAIL per blocker (b))
 ```
 
 Do not proceed to Phase B until A1–A6 are green.
@@ -447,10 +446,9 @@ cat >/home/ubuntu/shutdown_on_exit.sh <<'EOF'
 #!/bin/bash
 set +e
 cd /home/ubuntu/genomic-variant-classifier
-# Upload any artifacts present, even partial ones
-if [ -d runs/run9 ]; then
-    gcloud storage cp --recursive runs/run9 gs://genomic-variant-prod-outputs/runs/ || true
-fi
+# Artifacts are SCP'd from local box BEFORE trap fires (INCIDENT_2026-04-29).
+# No remote storage. If trap fires before manual SCP, partial artifacts
+# will be lost on the VM -- document any abnormal shutdown in INCIDENT.
 sudo shutdown -h now
 EOF
 chmod +x /home/ubuntu/shutdown_on_exit.sh
@@ -466,11 +464,11 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 pip install "transformers>=4.40,<5.0"    # pinned per INCIDENT 2026-04-17
 pip install "torch-geometric>=2.5"
 
-# B4. Pull input data from GCS
+# B4. Verify input data (pre-staged via SCP from local Windows box, INCIDENT_2026-04-29)
 mkdir -p data/external/spliceai data/raw
-gcloud storage cp gs://genomic-variant-prod-outputs/spliceai_index.parquet \
-    data/external/spliceai/spliceai_index.parquet
-gcloud storage cp -r gs://genomic-variant-prod-outputs/string_db/ data/raw/cache/
+ls -lh data/external/spliceai/spliceai_index.parquet  # expect ~336 MB
+ls -lh data/raw/cache/string_db/
+# If missing, exit and SCP from local before re-launching.
 
 # B5. VM preflight (catches path mismatches before training starts)
 bash scripts/preflight_vm.sh
@@ -504,9 +502,10 @@ python scripts/predict_vus.py \
     --output runs/run9/vus_predictions.parquet \
     --min-rank 1000   # top 1000 VUS by predicted pathogenicity
 
-# C4. Upload and shutdown
-gcloud storage cp --recursive runs/run9 gs://genomic-variant-prod-outputs/runs/
-# trap EXIT handles shutdown; or explicitly:
+# C4. Signal complete; user SCPs outputs back from local before shutdown.
+echo 'Training complete. SCP outputs back from local Windows box NOW.'
+echo 'On local: scp -i $KEY -r vastuser@<host>:/workspace/runs/run9 .\runs\'
+read -p 'Press ENTER after artefacts confirmed local; instance will shut down. ' _
 sudo shutdown -h now
 ```
 
@@ -515,8 +514,9 @@ sudo shutdown -h now
 Before closing the session:
 
 ```powershell
-# D1. Pull artefacts down
-gcloud storage cp --recursive gs://genomic-variant-prod-outputs/runs/run9 runs/
+# D1. Pull artefacts back from VM (SCP-only architecture, INCIDENT_2026-04-29)
+$KEY = "$env:USERPROFILE\.ssh\id_lambda_run8"
+scp -i $KEY -r vastuser@<vast-host>:/workspace/runs/run9 runs/
 
 # D2. Auto-generate the session doc from the artefacts
 python scripts/generate_run_report.py --run-id run9 \

@@ -62,8 +62,8 @@ NOT launched. GPU has NOT been spent.
    * Launch training with the command in `scripts/run9_launch.md`
    * Expect ESM-2 stub mode WARNING in logs (this is documented,
      not a failure)
-   * Upload outputs to GCS, verify with `gcloud storage ls`,
-     destroy instance
+   * SCP outputs back to local Windows box, verify file presence,
+     destroy instance (no GCS per INCIDENT_2026-04-29)
    * Write SESSION_YYYY-MM-DD_run9.md with per-model OOF AUROC,
      GNN edge count, esm2_delta_norm zero-fraction, SpliceAI
      importance rank, total GPU cost
@@ -87,8 +87,8 @@ NOT launched. GPU has NOT been spent.
 ### Standing rules that were reinforced this session
 
 - GPU is mandatory (no CPU fallback, ever)
-- Shutdown ordering: upload to GCS BEFORE destroying instance
-- 2026-04-17 rule: verify all GCS-state claims with `gcloud storage ls`
+- Shutdown ordering: SCP outputs back to local BEFORE destroying instance
+- INCIDENT_2026-04-29 rule (supersedes 2026-04-17 GCS rule): no remote storage; verify SCP-back claims with local file listing
 - Pre-flight cache check: the 430 MB SpliceAI cache MUST be absent
   before any training run — its presence indicates test-isolation leak
 
