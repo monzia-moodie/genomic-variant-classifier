@@ -935,3 +935,39 @@ Docker build smoke test).
 - `agent_data/arch_cleanup_stage4_batch.ps1` (this commit's batch)
 - Session doc: `docs/sessions/SESSION_2026-05-10_arch-cleanup.md`
 - Incident doc: `docs/incidents/INCIDENT_2026-04-29_gcp-billing-deletion.md`
+
+## 2026-05-10 — SpliceAI cache leak fix (path-aware conftest.py)
+
+### Attempted
+- Move class-scoped `_isolate_spliceai` fixture from `TestAnnotationPipeline` (test_core.py L2167) to a module-scoped autouse fixture in `tests/unit/conftest.py`, add `_save_cache` patch to plug the 430 MB `data/raw/cache/spliceai_scores_snv.parquet` regeneration leak.
+
+### Failed
+- **Attempt 1** (Stage 2 abort, no commit): helper's in-line post-apply check used a loose grep `if "_isolate_spliceai" in final_tc` that false-positived on the NEW class docstring's legitimate cross-reference to the new fixture location. Same-pattern-bug as the batch verification fix moments earlier — fixed one location, missed the identical pattern in the other.
+- **Attempt 2** (Stage 3b abort, no commit): fixture's UNCONDITIONAL `_save_cache → no-op` blocked the legitimate cache write in `test_parquet_cache_used_on_second_call`, which uses `FetchConfig(cache_dir=tmp_path / "cache")` — a tmp-scoped cache that does NOT touch the production dir. Test failed `assert score == 0.42 → got 0.0`. Cache mtime UNCHANGED throughout (leak prevention was working; over-blocking was the issue).
+- **Pre-check B** (non-fatal): Python helper structural validation via `& python -c @"..."@` errored on `f'{\"X\" if ok else \"Y\"}'` — PS here-strings pass `\"` literally; backslashes inside Python f-string `{expr}` are forbidden. Other pre-checks confirmed file state independently.
+
+### Fixed
+- **Attempt 3 commit `a01eef3`**: path-aware fixture design. New `_is_prod_cache_path(cache_path)` helper resolves the cache target and tests `relative_to(_PROD_CACHE_DIR.resolve())`; load/save are blocked only when path resolves under `data/raw/cache/`. tmp_path-scoped FetchConfigs are unaffected and exercise the real load→save→load flow. `_orig_load_cache` and `_orig_save_cache` captured before patch, called for non-prod paths.
+- Helper's in-line post-apply check tightened to `def _isolate_spliceai(` (the method definition) instead of the bare name (which legitimately appears in the new docstring's cross-reference).
+
+### Verified
+- 16 pytest tests pass in 58.90s (including `test_parquet_cache_used_on_second_call`, the regression test that exposed Attempt 2's over-blocking).
+- Cache mtime IDENTICAL pre/post pytest: `04/19/2026 13:56:19`.
+- Cache size IDENTICAL pre/post pytest: 451,626,904 bytes.
+- CI green on `a01eef3` (4 min runtime).
+
+### Learned
+- **Autouse + unconditional patching is dangerous.** Fixtures that null out shared infrastructure must be conditional/path-aware, not blanket no-ops. Cost of over-blocking: silent test failures that look like real bugs.
+- **Same-pattern-bug-different-location.** When fixing a pattern, grep the entire change-set for similar instances. Fixing the batch verification but missing the identical helper internal check cost an iteration.
+- **CRLF/UTF-8 byte-delta surprises.** Disk byte delta differs from Python char delta by `num_CRLF_lines + 2*multibyte_chars`. Existing `[WARN] -500 to -1500` bounds in the batch are tight; should widen to roughly `python_char_delta − num_lines_with_CRLF + 2*multibyte_char_count` in future batches.
+- **PS here-string + Python f-string interaction.** Inside `@"..."@`, `\"` is passed literally; backslashes in Python f-string `{expr}` are syntax errors. Use single quotes inside double-quoted f-strings.
+
+### Commits
+- `a01eef3` — `test(spliceai): move _isolate_spliceai fixture to conftest.py and add _save_cache patch to prevent 430 MB cache regeneration`
+
+### Refs
+- Helper: `agent_data/spliceai_cache_fix_code.py` (SHA `3ca0cca1cddaea0b0f46ec56be012482dae3fe8448875ad36cdc8b00b36d5d1e`)
+- Batch: `agent_data/spliceai_cache_fix_batch.ps1` (SHA `4d7023a9424f9b54a4e4fce0360bde0fa496736a7da1c1051c5bf6ba80a1491e`)
+- Session doc: `docs/sessions/SESSION_2026-05-10_spliceai-cache-fix.md`
+- New conftest: `tests/unit/conftest.py`
+- Prior session (arch cleanup, same day): `docs/sessions/SESSION_2026-05-10_arch-cleanup.md`
