@@ -9,9 +9,10 @@
 
 ## Architecture (post-INCIDENT_2026-04-29)
 
-- Data flow: Windows local source-of-truth ↔ Vast.ai GPU scratch via SCP (~1.0–1.2 GB per leg).
+- Data flow: Windows local source-of-truth ↔ Vast.ai GPU scratch via SCP (~1.0 GB per leg).
 - No remote object storage. GCP project `genomic-variant-prod` was deleted 2026-04-29.
 - Splits already built at `outputs/run9_ready/splits/` (78 cols, 1,700,687 labeled variants, train 1.2M / val 154K / test 349K, AUROC 0.9814 baseline from 2026-04-30 CPU regen).
+- `outputs/run9_ready/models/ensemble.joblib` (1.48 GB) is the **CPU regen ensemble** from 2026-04-30 — do NOT SCP it to Vast.ai. Run 9 trains fresh on GPU.
 
 ## Pre-launch gate (local, before spending any money)
 
@@ -38,7 +39,7 @@ echo "preflight exit: $LASTEXITCODE"
 - GPU: **RTX 4090** (24 GB VRAM)
 - RAM: **>= 60 GB** (dbNSFP + SpliceAI lookups are memory-heavy)
 - Disk: **>= 200 GB** (parquets + caches + per-ablation model artefacts)
-- CUDA: **12.x** PyTorch image
+- CUDA: **12.x** PyTorch image (image's pre-installed torch is what Run 9 uses — do NOT replace it)
 - SSH key: `C:\Users\monzi\.ssh\id_lambda_run8` (verified present; pubkey present; no-2FA API key authenticated 2026-05-10 via `vastai search offers`)
 
 Budget: 6 ablations × ~7000s each on RTX 4090 @ ~$0.27/hr + SHAP + permutation importance overhead ≈ **$5–10 total**. Destroy the instance the moment the final ablation prints.
@@ -54,22 +55,28 @@ $VAST_PORT = <port>
 $KEY = "$env:USERPROFILE\.ssh\id_lambda_run8"
 $REMOTE = "vastuser@${VAST_HOST}"
 
-# 1. Send pre-built splits (~70 MB; the whole splits/ subdir plus the scaler)
-scp -i $KEY -P $VAST_PORT -r outputs\run9_ready ${REMOTE}:/workspace/outputs/
+# 1. Send pre-built splits + scaler ONLY (~70 MB).
+#    DO NOT send outputs/run9_ready/models/ensemble.joblib (1.48 GB) -- that's
+#    the 2026-04-30 CPU regen ensemble; Run 9 trains fresh on GPU.
+ssh -i $KEY -p $VAST_PORT $REMOTE "mkdir -p /workspace/outputs/run9_ready /workspace/data/external/spliceai /workspace/data/external/string /workspace/data/external/alphamissense /workspace/data/external/gnomad /workspace/data/external/dbnsfp"
+scp -i $KEY -P $VAST_PORT -r outputs\run9_ready\splits ${REMOTE}:/workspace/outputs/run9_ready/
+# Scaler (small; harness reads it if present)
+scp -i $KEY -P $VAST_PORT outputs\run9_ready\scaler.joblib          ${REMOTE}:/workspace/outputs/run9_ready/
+scp -i $KEY -P $VAST_PORT outputs\run9_ready\scaler.manifest.json   ${REMOTE}:/workspace/outputs/run9_ready/
 
 # 2. Send external data
-scp -i $KEY -P $VAST_PORT data\external\spliceai\spliceai_index.parquet ${REMOTE}:/workspace/data/external/spliceai/
-scp -i $KEY -P $VAST_PORT data\external\string\9606.protein.links.detailed.v12.0.txt.gz ${REMOTE}:/workspace/data/external/string/
-scp -i $KEY -P $VAST_PORT data\external\string\9606.protein.info.v12.0.txt.gz ${REMOTE}:/workspace/data/external/string/
-scp -i $KEY -P $VAST_PORT data\external\alphamissense\AlphaMissense_hg38.tsv.gz ${REMOTE}:/workspace/data/external/alphamissense/
-scp -i $KEY -P $VAST_PORT data\external\gnomad\gnomad.v4.1.constraint_metrics.tsv ${REMOTE}:/workspace/data/external/gnomad/
-scp -i $KEY -P $VAST_PORT data\external\dbnsfp\dbnsfp_full_index.parquet ${REMOTE}:/workspace/data/external/dbnsfp/
+scp -i $KEY -P $VAST_PORT data\external\spliceai\spliceai_index.parquet                  ${REMOTE}:/workspace/data/external/spliceai/
+scp -i $KEY -P $VAST_PORT data\external\string\9606.protein.links.detailed.v12.0.txt.gz  ${REMOTE}:/workspace/data/external/string/
+scp -i $KEY -P $VAST_PORT data\external\string\9606.protein.info.v12.0.txt.gz            ${REMOTE}:/workspace/data/external/string/
+scp -i $KEY -P $VAST_PORT data\external\alphamissense\AlphaMissense_hg38.tsv.gz          ${REMOTE}:/workspace/data/external/alphamissense/
+scp -i $KEY -P $VAST_PORT data\external\gnomad\gnomad.v4.1.constraint_metrics.tsv        ${REMOTE}:/workspace/data/external/gnomad/
+scp -i $KEY -P $VAST_PORT data\external\dbnsfp\dbnsfp_full_index.parquet                 ${REMOTE}:/workspace/data/external/dbnsfp/
 
-# 3. Verify total SCP-up size (~1.0-1.2 GB)
+# 3. Verify total SCP-up size on the remote
 ssh -i $KEY -p $VAST_PORT $REMOTE "du -sh /workspace/outputs /workspace/data"
 ```
 
-If any path doesn't exist locally, check `data\external\` inventory before launching. Missing inputs cause silent-zero features (see Run 8 lessons).
+Expected: outputs/ ~70 MB, data/ ~500 MB-1 GB depending on dbNSFP index size. If any path doesn't exist locally, check `data\external\` inventory before launching. Missing inputs cause silent-zero features (see Run 8 lessons).
 
 ## On-VM setup (after SSH)
 
@@ -78,27 +85,32 @@ If any path doesn't exist locally, check `data\external\` inventory before launc
 cd /workspace
 git clone https://${GITHUB_TOKEN}@github.com/monzia-moodie-repo-projects/genomic-variant-classifier.git
 cd genomic-variant-classifier
-git log -1 --oneline   # must match the HEAD you launched from locally (899cae5 or newer)
+git log -1 --oneline   # must match the HEAD you launched from locally (0d88ec6 or newer)
 
-# 2. Install requirements. Editable install required post-C2 (pyproject.toml replaces setup.py).
-python -m venv venv && source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
-pip install -e .                            # editable install (genomic_variant_classifier namespace)
+# 2. Install requirements. Use the Vast.ai PyTorch image's system Python directly --
+#    creating a fresh venv would strip the image's pre-installed CUDA-enabled torch.
+#    Pattern matches Run 8.
+pip install -r requirements.txt
+pip install -e .                            # editable install (post-C2: pyproject.toml replaces setup.py)
 pip install "transformers>=4.40,<5.0"       # ESM-2 backend (stub mode in Run 9)
 pip install pykan                           # KAN base estimator (memory: reinstated for Vast.ai GPU runs)
 
-# 3. Verify data staged
-ls -lh /workspace/outputs/run9_ready/splits/X_train.parquet  # expect ~5 MB (1.2M rows, 78 cols)
-ls -lh /workspace/data/external/spliceai/spliceai_index.parquet  # expect ~336 MB
+# 3. Confirm CUDA is still wired up (sanity check after pip)
+python -c "import torch; print(f'torch={torch.__version__} cuda={torch.cuda.is_available()} dev={torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}')"
+# Expected: torch=2.x.y+cu12x cuda=True dev=NVIDIA GeForce RTX 4090
+# If cuda=False, STOP -- requirements.txt clobbered the image's CUDA torch.
+
+# 4. Verify data staged
+ls -lh /workspace/outputs/run9_ready/splits/X_train.parquet         # expect ~5 MB (1.2M rows, 78 cols)
+ls -lh /workspace/data/external/spliceai/spliceai_index.parquet     # expect ~336 MB
 ls -lh /workspace/data/external/string/9606.protein.links.detailed.v12.0.txt.gz
 
-# 4. Trap-EXIT shutdown handler — MUST run before training
+# 5. Trap-EXIT shutdown handler -- MUST run before training
 #    Fires on ANY exit: success, failure, crash, OOM, Ctrl-C.
-#    Note: destroy via web console at the end -- this trap is for abnormal exit only.
+#    Note: destroy via web console at the end -- this trap is for abnormal exit visibility.
 trap 'echo "[trap] training process exited; SCP your outputs back from local NOW before destroying"' EXIT INT TERM
 
-# 5. VM preflight (must exit 0 before training)
+# 6. VM preflight (must exit 0 before training)
 bash scripts/preflight_vm.sh
 echo "vm preflight exit: $?"
 ```
@@ -108,7 +120,7 @@ echo "vm preflight exit: $?"
 Per `docs/RUN9_SCIENTIFIC_DESIGN.md` §3.2: `full` + 5 LOCO ablations on the same fixed splits, same seed, so deltas are directly comparable.
 
 ```bash
-# Repo root, on the VM, inside the venv
+# Repo root, on the VM
 mkdir -p logs
 
 SPLITS_DIR=/workspace/outputs/run9_ready/splits
@@ -179,7 +191,7 @@ for ABL in full no_spliceai no_gnn no_alphamissense no_conservation no_populatio
     ls -la "/workspace/outputs/run9/${ABL}/" 2>/dev/null
 done
 
-# Cross-ablation roll-up (each ablation_results.parquet typically aggregates all configurations)
+# Cross-ablation roll-up
 python -c "
 import pandas as pd
 from pathlib import Path
