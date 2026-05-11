@@ -1,1 +1,6 @@
 requirements-api.lock text eol=lf
+
+# Shell scripts run on Linux VMs - force LF endings regardless of core.autocrlf.
+# Without this, Windows checkouts CRLF-ify the working tree and bash on the VM
+# fails with /bin/bash^M: bad interpreter.
+*.sh text eol=lf
