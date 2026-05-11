@@ -122,15 +122,24 @@ else
 fi
 
 # -------------------------------------------------------------------------
-# 5. ClinVar
+# 5. ClinVar / labels (workflow-aware)
 # -------------------------------------------------------------------------
-echo "=== ClinVar check ==="
-CLINVAR_PATH="${CLINVAR_PATH:-data/raw/clinvar/clinvar_GRCh38.vcf.gz}"
-if [[ -f "$CLINVAR_PATH" ]]; then
-  SZ=$(du -h "$CLINVAR_PATH" | cut -f1)
-  pass "ClinVar: $CLINVAR_PATH ($SZ)"
+# In ablation mode (pre-built splits present), labels are baked into
+# y_train.parquet and the raw ClinVar VCF is NOT needed. The runbook
+# explicitly does not SCP the VCF up.
+# In full-regen mode (no pre-built splits), the raw VCF is required.
+echo "=== ClinVar / labels check ==="
+SPLITS_DIR_CHECK="${SPLITS_DIR:-outputs/run9_ready/splits}"
+if [[ -f "$SPLITS_DIR_CHECK/y_train.parquet" ]]; then
+  pass "Pre-built labels present at $SPLITS_DIR_CHECK/y_train.parquet (ablation mode; raw ClinVar VCF not needed)"
 else
-  fail "ClinVar MISSING at $CLINVAR_PATH -- no training labels"
+  CLINVAR_PATH="${CLINVAR_PATH:-data/raw/clinvar/clinvar_GRCh38.vcf.gz}"
+  if [[ -f "$CLINVAR_PATH" ]]; then
+    SZ=$(du -h "$CLINVAR_PATH" | cut -f1)
+    pass "ClinVar VCF (full-regen mode): $CLINVAR_PATH ($SZ)"
+  else
+    fail "No pre-built labels AND no raw ClinVar VCF -- cannot train"
+  fi
 fi
 
 # -------------------------------------------------------------------------
@@ -161,16 +170,30 @@ else
 fi
 
 # -------------------------------------------------------------------------
-# 8. Critical Python imports
+# 8. Critical Python imports (workflow-aware)
 # -------------------------------------------------------------------------
+# torch_geometric and networkx are ONLY imported by scripts/run_phase2_eval.py
+# (the GNN training path used during full-regen). variant_ensemble.py and
+# run9_ablations.py do NOT import them -- gnn_score is a precomputed feature
+# column. We detect workflow via splits presence and require accordingly.
 echo "=== Python import check ==="
-python - <<'EOF' 2>&1 | while read ln; do echo "    $ln"; done
-import importlib, sys
+SPLITS_DIR_CHECK="${SPLITS_DIR:-outputs/run9_ready/splits}"
+if [[ -f "$SPLITS_DIR_CHECK/y_train.parquet" ]]; then
+    WORKFLOW="run9_ablations"
+else
+    WORKFLOW="run_phase2_eval"
+fi
+echo "    Detected workflow: $WORKFLOW"
+
+WORKFLOW="$WORKFLOW" python - <<'EOF' 2>&1 | while read ln; do echo "    $ln"; done
+import importlib, os, sys
+workflow = os.environ.get("WORKFLOW", "unknown")
 required = [
     "pandas", "numpy", "torch", "sklearn", "xgboost", "lightgbm",
-    "catboost", "torch_geometric", "transformers", "pyarrow",
-    "networkx", "scipy",
+    "catboost", "transformers", "pyarrow", "scipy",
 ]
+if workflow == "run_phase2_eval":
+    required.extend(["torch_geometric", "networkx"])
 failed = []
 for mod in required:
     try:
@@ -184,14 +207,16 @@ if failed:
 print("ALL_IMPORTS_OK")
 EOF
 
-if python - <<'EOF' 2>/dev/null
-import importlib
-for mod in ["pandas", "torch", "xgboost", "lightgbm", "catboost",
-            "torch_geometric", "transformers"]:
+if WORKFLOW="$WORKFLOW" python - <<'EOF' 2>/dev/null
+import importlib, os
+required = ["pandas", "torch", "xgboost", "lightgbm", "catboost", "transformers"]
+if os.environ.get("WORKFLOW") == "run_phase2_eval":
+    required.append("torch_geometric")
+for mod in required:
     importlib.import_module(mod)
 EOF
 then
-  pass "all required Python modules importable"
+  pass "all required Python modules importable (workflow: $WORKFLOW)"
 else
   fail "at least one required Python module fails to import"
 fi

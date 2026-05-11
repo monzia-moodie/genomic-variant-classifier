@@ -55,6 +55,21 @@ $VAST_PORT = <port>
 $KEY = "$env:USERPROFILE\.ssh\id_lambda_run8"
 $REMOTE = "vastuser@${VAST_HOST}"
 
+# NEW: cost-safety env vars for auto-destroy on preflight failure.
+# VAST_API_KEY is your no-2FA API key. INSTANCE_ID is shown in the web console
+# (also returned by `vastai show instances`).
+$VAST_API_KEY = "<your-no-2fa-key>"
+$INSTANCE_ID = "<instance-id>"
+
+# 0. Inject env vars into the VM's .bashrc so launch_run9_vm.sh can use them
+$envInject = @"
+echo 'export GITHUB_TOKEN=$env:GITHUB_TOKEN' >> ~/.bashrc
+echo 'export VAST_API_KEY=$VAST_API_KEY' >> ~/.bashrc
+echo 'export INSTANCE_ID=$INSTANCE_ID' >> ~/.bashrc
+grep -E 'GITHUB_TOKEN|VAST_API_KEY|INSTANCE_ID' ~/.bashrc | sed 's/=.*/=***REDACTED***/'
+"@
+ssh -i $KEY -p $VAST_PORT $REMOTE $envInject
+
 # 1. Send pre-built splits + scaler ONLY (~70 MB).
 #    DO NOT send outputs/run9_ready/models/ensemble.joblib (1.48 GB) -- that's
 #    the 2026-04-30 CPU regen ensemble; Run 9 trains fresh on GPU.
@@ -78,44 +93,42 @@ ssh -i $KEY -p $VAST_PORT $REMOTE "du -sh /workspace/outputs /workspace/data"
 
 Expected: outputs/ ~70 MB, data/ ~500 MB-1 GB depending on dbNSFP index size. If any path doesn't exist locally, check `data\external\` inventory before launching. Missing inputs cause silent-zero features (see Run 8 lessons).
 
-## On-VM setup (after SSH)
+## On-VM setup + launch (after SSH)
+
+Use the committed launch script `scripts/launch_run9_vm.sh`. It bundles
+clone + pip install + preflight + the 6-ablation training loop into a
+single script with cost-safety auto-destroy on pre-training failures.
 
 ```bash
 # 1. Clone repo and confirm HEAD
 cd /workspace
 git clone https://${GITHUB_TOKEN}@github.com/monzia-moodie-repo-projects/genomic-variant-classifier.git
 cd genomic-variant-classifier
-git log -1 --oneline   # must match the HEAD you launched from locally (0d88ec6 or newer)
+git log -1 --oneline   # must match the HEAD you launched from locally
 
-# 2. Install requirements. Use the Vast.ai PyTorch image's system Python directly --
-#    creating a fresh venv would strip the image's pre-installed CUDA-enabled torch.
-#    Pattern matches Run 8.
+# 2. Install vastai CLI on the VM (needed for self-destroy on failure)
+pip install -q vastai
+
+# 3. Install requirements (other deps installed by launch script's `pip install -e .`)
 pip install -r requirements.txt
-pip install -e .                            # editable install (post-C2: pyproject.toml replaces setup.py)
-pip install "transformers>=4.40,<5.0"       # ESM-2 backend (stub mode in Run 9)
-pip install pykan                           # KAN base estimator (memory: reinstated for Vast.ai GPU runs)
+pip install "transformers>=4.40,<5.0"
+pip install pykan
 
-# 3. Confirm CUDA is still wired up (sanity check after pip)
-python -c "import torch; print(f'torch={torch.__version__} cuda={torch.cuda.is_available()} dev={torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}')"
-# Expected: torch=2.x.y+cu12x cuda=True dev=NVIDIA GeForce RTX 4090
-# If cuda=False, STOP -- requirements.txt clobbered the image's CUDA torch.
-
-# 4. Verify data staged
-ls -lh /workspace/outputs/run9_ready/splits/X_train.parquet         # expect ~5 MB (1.2M rows, 78 cols)
-ls -lh /workspace/data/external/spliceai/spliceai_index.parquet     # expect ~336 MB
-ls -lh /workspace/data/external/string/9606.protein.links.detailed.v12.0.txt.gz
-
-# 5. Trap-EXIT shutdown handler -- MUST run before training
-#    Fires on ANY exit: success, failure, crash, OOM, Ctrl-C.
-#    Note: destroy via web console at the end -- this trap is for abnormal exit visibility.
-trap 'echo "[trap] training process exited; SCP your outputs back from local NOW before destroying"' EXIT INT TERM
-
-# 6. VM preflight (must exit 0 before training)
-bash scripts/preflight_vm.sh
-echo "vm preflight exit: $?"
+# 4. Launch (auto-destroy ONLY if preflight fails BEFORE training starts).
+#    Outputs streamed to nohup'd master log. Detach by exiting SSH.
+nohup bash scripts/launch_run9_vm.sh > /workspace/run9_master.log 2>&1 &
+LAUNCH_PID=$!
+disown
+echo "Launched PID: $LAUNCH_PID"
+sleep 10
+ps -p $LAUNCH_PID >/dev/null && echo "[OK] launch script is running" || echo "[FAIL] launch script died -- check master log"
+head -40 /workspace/run9_master.log
 ```
 
-## Launch training — six-ablation LOCO sequence
+## Launch training — sequence is in launch_run9_vm.sh
+
+The 6-ablation LOCO sequence is now driven by `scripts/launch_run9_vm.sh`.
+The script trains:
 
 Per `docs/RUN9_SCIENTIFIC_DESIGN.md` §3.2: `full` + 5 LOCO ablations on the same fixed splits, same seed, so deltas are directly comparable.
 
