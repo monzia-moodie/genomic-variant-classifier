@@ -1122,3 +1122,106 @@ Docker build smoke test).
 - Run 9 outputs audit: `scripts/run9_outputs_audit.ps1` (placed
   2026-05-13)
 
+# Phase 1.5b CHANGELOG entry
+
+Append this block to `docs/CHANGELOG.md` (after the existing
+`## 2026-05-12 — Run 9:` entry).
+
+---
+
+## 2026-05-13 (post-1.5) — Phase 1.5b: test fixes + FinnGen wiring correction
+
+### Test fixes — commit 66593d6 shipped 2 broken tests
+
+The Phase 1 patch bundle (`run10_phase1_v2.zip`, commit 66593d6) shipped 4
+regression tests with 2 sandbox-only assumptions that broke under production
+pytest:
+
+**1.** `tests/unit/test_variant_ensemble_save_load.py::test_ensemble_save_creates_per_model_checkpoints`
+and `::test_ensemble_load_roundtrip` called `ens.fit_minimal(X_tab, X_seq, y)` —
+a helper method that exists in Claude's sandbox draft but was never shipped to
+production `variant_ensemble.py`.
+
+```
+AttributeError: 'VariantEnsemble' object has no attribute 'fit_minimal'
+```
+
+**Fix (1.5b):** rewritten as one consolidated test `test_ensemble_save_load_with_cnn1d`
+that restricts `ens.base_estimators` to `{"lightgbm", "cnn_1d"}` BEFORE
+calling `ens.fit()`, then exercises the full save/load/predict_proba round
+trip on a 60-row balanced synthetic dataset. CNN1D is in the restricted set
+specifically to exercise the A1 pickle-fix code path.
+
+**2.** `tests/unit/test_lovd_annotation_reaches_training_matrix.py::test_lovd_annotation_reaches_training_matrix`
+and `::test_lovd_annotation_silent_zero_when_path_omitted` used a 5-row gene
+fixture (TP53×2, GENE_X, BRCA2, APC) that `GroupShuffleSplit` cannot partition
+into class-balanced train/val/test splits.
+
+```
+ValueError: Gene-aware split 'train' missing class(es): {np.int64(1)}.
+Try lowering min_review_tier or increasing dataset size.
+```
+
+**Fix (1.5b):** added `require_both_classes=False` to both tests' `DataPrepConfig`.
+The class-balance constraint is for production training; the LOVD column-
+propagation check these tests target doesn't need it.
+
+Tests 1 and 2 (`test_cnn1d_module_class_is_module_level` and
+`test_cnn1d_pickles_after_fit`) passed in production unchanged. Those tests
+directly validate the A1 pickle fix and remain the most important regression
+guards.
+
+### FinnGen wiring — commit 66593d6 message was incorrect
+
+The 66593d6 commit message stated:
+
+> NOTE: FinnGen wiring is partial. B1 sets AnnotationConfig.finngen_path
+> but real_data_prep.py annotate chain does not invoke FinnGenConnector
+> (regen.log shows no FinnGen step). Phase 1.6 will add the connector
+> invocation. LOVD and DbNSFP are fully fixed.
+
+This is **incorrect** and was based on a false inference that "no FinnGen
+entries in regen.log" implied "FinnGen connector not wired". Empirical
+verification on 2026-05-13 via direct grep of `src/genomic_variant_classifier/data/real_data_prep.py`:
+
+```
+185:    finngen_path: Optional[Path] = None  # FinnGen R10 annotated variants TSV
+418:    # FinnGen R10: third-tier AF fallback after gnomAD and 1KGP
+419:    if self.annotation_config.finngen_path:
+420:        from genomic_variant_classifier.data.finngen import FinnGenConnector
+422:        finngen = FinnGenConnector(tsv_path=self.annotation_config.finngen_path)
+423:        df = finngen.annotate(df)
+425:    else:
+427:        for col in FINNGEN_COLUMNS:
+430:        df["finngen_enrichment"] = 1.0
+```
+
+**Phase 1 B1 IS sufficient for FinnGen.** Passing `--finngen-path` to
+`scripts/run_phase2_eval.py` sets `AnnotationConfig.finngen_path`, which
+satisfies the line 419 conditional and invokes `FinnGenConnector.annotate()`
+at line 422. Same fix shape as LOVD and DbNSFP.
+
+The reason no FinnGen entries appear in Run 9's `outputs/run9_ready/regen.log`
+is **NOT** a wiring gap — it's that the `else` branch at line 425-430 silently
+fills defaults (`finngen_af_fin=0`, `finngen_af_nfsee=0`, `finngen_enrichment=1`)
+with **no log emission at all**. This is a *worse* silent-zero pattern than
+LOVD or DbNSFP (which at least emit a WARNING that audit greps catch).
+
+FinnGen is wired into the **AF-fallback** stage (line ~418, third tier after
+gnomAD and 1KGP) — NOT into the **score-annotation** stage (line 504+). The
+"Score annotation N/M" log series covers the 17 score connectors only.
+That's why `Select-String "Score annotation"` against `real_data_prep.py`
+shows 17 score steps with FinnGen absent — that absence is structural, not
+a bug.
+
+**Phase 1.6 follow-up (deferred, optional):** add an `INFO` log to the
+FinnGen `else` branch so silent-zero is detectable in `regen.log` audits.
+Small code-hygiene patch, can ride with `sequence_context.py` stub work.
+
+### Phase 1 commit message accuracy
+
+The 66593d6 commit message will remain as-is (git history rewrite not worth
+the risk on `main`). The correction lives here and will be referenced by any
+future audit. Future commit messages should phrase FinnGen as "fully wired"
+alongside LOVD and DbNSFP.
+

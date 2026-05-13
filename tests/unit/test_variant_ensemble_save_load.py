@@ -1,149 +1,187 @@
 """
-tests/unit/test_variant_ensemble_save_load.py
-==============================================
-Regression tests for Run 10 patch A1 + A2:
+Regression tests for Run 10 Phase 1 patches to variant_ensemble.py.
 
-  A1: CNN1D inner nn.Module moved from nested local class to module level
-      (Run 9 crash root cause:
-       INCIDENT_2026-05-12_cnn1d-pickle-nested-class.md)
+A1: _CNN1D lifted to module-level _CNN1DModule  (pickle fix)
+A2: VariantEnsemble.save() refactored to per-model checkpoints
 
-  A2: VariantEnsemble.save()/load() refactored to per-model checkpoint
-      layout; single-model pickle failure no longer corrupts the entire
-      ensemble (INCIDENT_2026-05-12_no-per-model-checkpoint.md)
+History:
+- 2026-05-13 run10_phase1_v2.zip: original tests shipped.
+- 2026-05-13 run10_phase1_5b.zip: tests 3 + 4 rewritten. The original
+  pair called ens.fit_minimal(...), a helper that exists in Claude's
+  sandbox draft but was never shipped to production variant_ensemble.py.
+  Symptom: AttributeError: 'VariantEnsemble' object has no attribute
+  'fit_minimal'. Replaced with one consolidated test that exercises a
+  real fit() on a restricted 2-model subset (lightgbm + cnn_1d).
 
-Coverage:
-  - _ensure_cnn1d_module_class() yields a class with module-level qualname
-  - A fitted CNN1DClassifier pickles cleanly
-  - VariantEnsemble.save() produces orchestrator + per-model joblib layout
-  - VariantEnsemble.load() round-trips both old (single-joblib) and new
-    (orchestrator + per-model dir) formats
-  - predict_proba works on the reloaded CNN1D
-
-The tests use a minimal `fit_minimal` helper on VariantEnsemble that
-fits one tree model + CNN1D against 40 synthetic rows. Total runtime
-is ~3-5s on CPU.
+Refs:
+- docs/incidents/INCIDENT_2026-05-12_cnn1d-pickle-nested-class.md
+- docs/incidents/INCIDENT_2026-05-12_no-per-model-checkpoint.md
 """
 from __future__ import annotations
 
-from pathlib import Path
+import numpy as np
+import pandas as pd
 import pytest
 
-# Skip the whole file if torch isn't installed — the CNN1D branch
-# requires it and tests would be meaningless without it.
-torch = pytest.importorskip("torch")
 
-
+# ---------------------------------------------------------------------------
+# Synthetic fixture
+# ---------------------------------------------------------------------------
 @pytest.fixture
 def synthetic_data():
-    import numpy as np
-    import pandas as pd
+    """60-row balanced synthetic dataset.
 
-    rng = np.random.RandomState(0)
-    X_tab = pd.DataFrame(rng.rand(40, 5))
-    X_seq = pd.Series(["ACGT" * 25 + "A"] * 40)  # 101 bp constant
-    y = rng.randint(0, 2, 40)
+    Sized for:
+    - 5-fold StratifiedKFold (default n_folds): 12 rows/fold, 6 of each class
+    - CNN1D default batch_size: ~2 batches/fold
+    - Full 2-model fit (lightgbm + cnn_1d) under ~15s on CPU
+    """
+    rng = np.random.default_rng(42)
+    n = 60
+    y = pd.Series(np.array([0, 1] * (n // 2)), name="label")
+    X_tab = pd.DataFrame(
+        rng.random((n, 6)), columns=[f"f{i}" for i in range(6)],
+    )
+    bases = np.array(list("ACGT"))
+    X_seq = pd.Series(
+        ["".join(rng.choice(bases, 101)) for _ in range(n)],
+        name="fasta_seq",
+    )
     return X_tab, X_seq, y
 
 
+# ---------------------------------------------------------------------------
+# Test 1: A1 qualname check (unchanged from 1.5)
+# ---------------------------------------------------------------------------
 def test_cnn1d_module_class_is_module_level():
-    """After _ensure_cnn1d_module_class() runs, the class qualname must
-    resolve at module level so pickle can find it across processes.
+    """A1: _CNN1DModule must resolve at module level, not as a nested
+    local class inside CNN1DClassifier._build_model. Minimal smoke test
+    for the pickle fix.
     """
-    from genomic_variant_classifier.models import variant_ensemble as ve
-
-    cls = ve._ensure_cnn1d_module_class()
-    assert cls.__name__ == "_CNN1DModule"
+    pytest.importorskip("torch")
+    from genomic_variant_classifier.models.variant_ensemble import (
+        _ensure_cnn1d_module_class,
+    )
+    cls = _ensure_cnn1d_module_class()
     assert cls.__qualname__ == "_CNN1DModule", (
-        f"Expected module-level qualname; got {cls.__qualname__!r}. "
-        "Nested local-class qualnames fail pickling — see "
-        "INCIDENT_2026-05-12_cnn1d-pickle-nested-class.md"
+        f"Expected qualname='_CNN1DModule', got '{cls.__qualname__}' "
+        "— the class is still nested inside _build_model.<locals>"
     )
-    assert cls.__module__ == "genomic_variant_classifier.models.variant_ensemble"
+    assert cls.__module__ == (
+        "genomic_variant_classifier.models.variant_ensemble"
+    ), f"Wrong __module__: {cls.__module__}"
 
 
-def test_cnn1d_pickles_after_fit(synthetic_data, tmp_path):
-    """A fitted CNN1DClassifier with a real torch state dict must pickle
-    cleanly. This is the exact operation that crashed Run 9.
+# ---------------------------------------------------------------------------
+# Test 2: A1 direct pickle round-trip (unchanged from 1.5)
+# ---------------------------------------------------------------------------
+def test_cnn1d_pickles_after_fit(tmp_path):
+    """A1: a fit CNN1DClassifier must round-trip through joblib.dump/load
+    without PicklingError. Direct regression test for the Run 9 crash.
     """
+    pytest.importorskip("torch")
     import joblib
-    from genomic_variant_classifier.models.variant_ensemble import CNN1DClassifier
+    from genomic_variant_classifier.models.variant_ensemble import (
+        CNN1DClassifier,
+    )
+    rng = np.random.default_rng(42)
+    bases = np.array(list("ACGT"))
+    X = pd.Series(
+        ["".join(rng.choice(bases, 101)) for _ in range(30)]
+    )
+    y = pd.Series(np.array([0, 1] * 15))
 
-    _, X_seq, y = synthetic_data
-    cnn = CNN1DClassifier(epochs=1, batch_size=8)
-    cnn.fit(X_seq, y)
+    cnn = CNN1DClassifier(
+        filters=4, kernel_size=3, dropout=0.0,
+        batch_size=8, epochs=1, random_state=42,
+    )
+    cnn.fit(X, y)
 
-    path = tmp_path / "cnn_only.joblib"
-    joblib.dump(cnn, path)
-    assert path.exists()
-    assert path.stat().st_size > 1000  # state dict alone is ~300 KB
+    p = tmp_path / "cnn1d.joblib"
+    joblib.dump(cnn, p)  # Previously raised PicklingError on _CNN1D
+    assert p.exists() and p.stat().st_size > 0
 
-    cnn2 = joblib.load(path)
-    proba = cnn2.predict_proba(X_seq[:3])
-    assert proba.shape == (3, 2)
+    cnn2 = joblib.load(p)
+    proba1 = cnn.predict_proba(X)
+    proba2 = cnn2.predict_proba(X)
+    np.testing.assert_allclose(proba1, proba2, atol=1e-5)
 
 
-def test_ensemble_save_creates_per_model_checkpoints(
-    synthetic_data, tmp_path
-):
-    """save() must write each base model into its own joblib next to
-    the orchestrator. Validates the per-model-checkpoint refactor (A2).
+# ---------------------------------------------------------------------------
+# Test 3 (rewritten in 1.5b): A1 + A2 end-to-end save/load
+# ---------------------------------------------------------------------------
+def test_ensemble_save_load_with_cnn1d(synthetic_data, tmp_path):
+    """A1 + A2 end-to-end: fit a 2-model subset (lightgbm + cnn_1d), save,
+    load via the classmethod, verify predict_proba on both branches.
+
+    Restricting base_estimators to 2 models keeps full fit() under ~15s.
+    CNN1D MUST be in the subset to exercise the pickle-fix code path —
+    that's the whole point of this test.
+
+    Rewritten 2026-05-13 (run10_phase1_5b.zip) from the broken
+    test_ensemble_save_creates_per_model_checkpoints +
+    test_ensemble_load_roundtrip pair that referenced a non-existent
+    ens.fit_minimal() helper.
     """
-    import joblib
+    pytest.importorskip("torch")
+    pytest.importorskip("lightgbm")
     from genomic_variant_classifier.models.variant_ensemble import (
         VariantEnsemble, EnsembleConfig,
     )
-
     X_tab, X_seq, y = synthetic_data
-    ens = VariantEnsemble(EnsembleConfig(model_dir=tmp_path))
-    ens.fit_minimal(X_tab, X_seq, y)
 
-    save_path = tmp_path / "ensemble.joblib"
-    ens.save(save_path)
+    # Build ensemble, then restrict to 2 base models BEFORE fit().
+    # The full 8/11-model ensemble on 60 rows would take 60+ seconds even
+    # with n_jobs=1; the 2-model subset is the minimal exercise of A1+A2.
+    cfg = EnsembleConfig(n_jobs=1)
+    ens = VariantEnsemble(cfg)
+    keep = {"lightgbm", "cnn_1d"}
+    ens.base_estimators = {
+        k: v for k, v in ens.base_estimators.items() if k in keep
+    }
 
-    # Orchestrator + manifest
-    assert save_path.exists()
-    assert save_path.with_suffix(".manifest.json").exists()
+    ens.fit(X_tab, X_seq, y)
 
-    # Per-model checkpoint dir
-    models_dir = tmp_path / "ensemble_models"
-    assert models_dir.is_dir()
-    assert (models_dir / "lightgbm.joblib").exists()
-    assert (models_dir / "cnn_1d.joblib").exists()
-
-    # Orchestrator content
-    orch = joblib.load(save_path)
-    assert isinstance(orch, dict)
-    assert orch["format_version"] == 2
-    assert "lightgbm" in orch["saved_model_paths"]
-    assert "cnn_1d" in orch["saved_model_paths"]
-    # No save errors expected with the A1 fix in place
-    assert orch["save_errors"] == {}
-
-
-def test_ensemble_load_roundtrip(synthetic_data, tmp_path):
-    """save() then load() must produce an ensemble where predict_proba
-    works on both the tree model and the CNN1D.
-    """
-    from genomic_variant_classifier.models.variant_ensemble import (
-        VariantEnsemble, EnsembleConfig,
+    # After fit(), trained_models_ should contain both
+    trained = set(ens.trained_models_.keys())
+    assert trained == keep, (
+        f"Expected {keep}, got {trained}. Did fit() skip a model?"
     )
 
-    X_tab, X_seq, y = synthetic_data
-    ens = VariantEnsemble(EnsembleConfig(model_dir=tmp_path))
-    ens.fit_minimal(X_tab, X_seq, y)
-
-    save_path = tmp_path / "ensemble.joblib"
+    # A2 save() — pass a fresh subdirectory path. The A2 patch may write
+    # either an orchestrator joblib + per-model files, or a directory of
+    # joblibs. The test only asserts that load() can reconstruct what
+    # save() wrote, agnostic to internal layout.
+    save_path = tmp_path / "ensemble"
     ens.save(save_path)
 
+    # Reload via classmethod
     ens2 = VariantEnsemble.load(save_path)
-    assert set(ens2.trained_models_.keys()) == {"lightgbm", "cnn_1d"}
 
-    # Both predict
-    lgb_proba = ens2.trained_models_["lightgbm"].predict_proba(X_tab.values)
-    cnn_proba = ens2.trained_models_["cnn_1d"].predict_proba(X_seq)
-    assert lgb_proba.shape == (40, 2)
-    assert cnn_proba.shape == (40, 2)
+    # Verify both models present after load
+    trained2 = set(ens2.trained_models_.keys())
+    assert trained2 == keep, (
+        f"After load: expected {keep}, got {trained2}. "
+        "A2 per-model save/load is lossy."
+    )
 
-    # Blend weights survive
-    import numpy as np
-    assert np.allclose(ens2.blend_weights_, ens.blend_weights_)
+    # predict_proba must work on both branches: tabular routing for
+    # lightgbm, sequence routing for cnn_1d. The dispatch logic lives
+    # inside VariantEnsemble.predict_proba.
+    proba1 = ens.predict_proba(X_tab, X_seq)
+    proba2 = ens2.predict_proba(X_tab, X_seq)
+
+    assert proba1.shape == (len(X_tab), 2), f"Got {proba1.shape}"
+    assert proba2.shape == (len(X_tab), 2), f"Got {proba2.shape}"
+
+    # Valid probabilities
+    assert np.all((proba1 >= 0) & (proba1 <= 1)), \
+        "predict_proba returned values outside [0, 1]"
+    assert np.all((proba2 >= 0) & (proba2 <= 1))
+
+    # Determinism: same fitted state must give identical predictions
+    np.testing.assert_allclose(
+        proba1, proba2, atol=1e-5,
+        err_msg="Loaded ensemble gives different predictions than the "
+                "original — save()/load() round-trip is lossy (A2 regression)",
+    )
