@@ -222,6 +222,91 @@ else
 fi
 
 # -------------------------------------------------------------------------
+# 9. LOVD parquet (Phase 1 B1 fix; Run 9 silent-zero source)
+# -------------------------------------------------------------------------
+echo "=== LOVD parquet check ==="
+LOVD_PATH="${LOVD_PATH:-data/external/lovd/lovd_all_variants.parquet}"
+if [[ -f "$LOVD_PATH" ]]; then
+  SZ_KB=$(du -k "$LOVD_PATH" | cut -f1)
+  if [[ "$SZ_KB" -ge 100 ]]; then
+    pass "LOVD parquet: $LOVD_PATH (${SZ_KB} KB)"
+  else
+    fail "LOVD parquet at $LOVD_PATH is only ${SZ_KB} KB (expected >= 100; file may be truncated)"
+  fi
+else
+  # Run 10 uses existing run9_ready splits; LOVD path is optional here.
+  # When splits are regenerated via run_phase2_eval.py --lovd-path (Run 10a),
+  # this file becomes required to populate lovd_variant_class.
+  warn "LOVD parquet not present at $LOVD_PATH -- lovd_variant_class will remain 0 (Run 9 silent-zero pattern; OK for Run 10, required for Run 10a)"
+fi
+
+# -------------------------------------------------------------------------
+# 10. DbNSFP parquet (Phase 1 B1 fix; Run 9 silent-zero source)
+# -------------------------------------------------------------------------
+echo "=== DbNSFP parquet check ==="
+DBNSFP_PATH="${DBNSFP_PATH:-data/external/dbnsfp/dbnsfp_clinvar_index.parquet}"
+if [[ -f "$DBNSFP_PATH" ]]; then
+  SZ_MB=$(du -m "$DBNSFP_PATH" | cut -f1)
+  if [[ "$SZ_MB" -ge 20 ]]; then
+    pass "DbNSFP parquet: $DBNSFP_PATH (${SZ_MB} MB)"
+  else
+    fail "DbNSFP parquet at $DBNSFP_PATH is only ${SZ_MB} MB (expected >= 20)"
+  fi
+else
+  # Same Run 10 vs Run 10a contract as LOVD above.
+  warn "DbNSFP parquet not present at $DBNSFP_PATH -- DbNSFP scores fall back to population medians (Run 9 silent-zero pattern; OK for Run 10, required for Run 10a)"
+fi
+
+# -------------------------------------------------------------------------
+# 11. FinnGen TSV (optional; deferred to Run 10b after pre-indexing)
+# -------------------------------------------------------------------------
+# Raw FinnGen R12 is ~30 GB gzipped TSV. Run 10b will pre-index to a
+# ClinVar-intersected parquet before launching. Until then this check
+# is warn-only.
+echo "=== FinnGen TSV check (optional) ==="
+FINNGEN_PATH="${FINNGEN_PATH:-data/external/finngen/finnge_R12_annotated_variants_v1.gz}"
+if [[ -f "$FINNGEN_PATH" ]]; then
+  SZ_MB=$(du -m "$FINNGEN_PATH" | cut -f1)
+  pass "FinnGen TSV: $FINNGEN_PATH (${SZ_MB} MB)"
+else
+  warn "FinnGen TSV not present at $FINNGEN_PATH -- finngen_af_fin/nfsee=0, finngen_enrichment=1.0 (acceptable for Run 10/10a; required for Run 10b)"
+fi
+
+# -------------------------------------------------------------------------
+# 12. sklearn + lightgbm version + 1000-row smoke fit (Phase 1.5b lesson)
+# -------------------------------------------------------------------------
+# Phase 1.5b chased a phantom 'check_X_y() got an unexpected keyword argument
+# force_all_finite' error that turned out to be a stale .pyc rather than real
+# version skew. To prevent the same false-alarm cycle from eating GPU billing,
+# we fit a 1000-row LGBMClassifier on the actual versioned binaries. If the
+# OOF wrapper would silently downgrade lightgbm to ERROR-and-skip, we catch
+# it here BEFORE training starts.
+echo "=== sklearn + lightgbm version + smoke fit ==="
+SMOKE_OUT=$(python - <<'PYEOF' 2>&1
+import sys
+try:
+    import sklearn, lightgbm
+    print(f"    sklearn={sklearn.__version__}  lightgbm={lightgbm.__version__}")
+    from sklearn.datasets import make_classification
+    from lightgbm import LGBMClassifier
+    X, y = make_classification(n_samples=1000, n_features=10, random_state=42)
+    clf = LGBMClassifier(n_estimators=10, verbose=-1)
+    clf.fit(X, y)
+    _ = clf.predict_proba(X[:5])
+    print("    LGBM_SMOKE_OK")
+except Exception as e:
+    print(f"    LGBM_SMOKE_FAIL: {type(e).__name__}: {e}")
+    sys.exit(1)
+PYEOF
+)
+echo "$SMOKE_OUT"
+if echo "$SMOKE_OUT" | grep -q "LGBM_SMOKE_OK"; then
+  pass "sklearn + lightgbm compatible (1000-row LGBMClassifier smoke fit succeeded)"
+else
+  fail "sklearn / lightgbm version skew or env issue -- LGBM_SMOKE_FAIL (see above)"
+fi
+
+# -------------------------------------------------------------------------
 # Summary
 # -------------------------------------------------------------------------
 echo ""

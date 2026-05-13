@@ -1447,3 +1447,121 @@ Phase 1 regression suite GREEN end-to-end. Ready to advance to Phase 1.6
 (`sequence_context.py` stub + optional FinnGen INFO log) or directly to
 Phase 1.7 (launch script + requirements pinning).
 
+
+# Phase 1.7 CHANGELOG entry
+
+Append this block to `docs/CHANGELOG.md` (after the existing
+`## 2026-05-13 (post-1.5d) â€” Phase 1.5e:` entry).
+
+---
+
+## 2026-05-13 (post-1.5e) â€” Phase 1.7: Run 10 launch readiness
+
+Three artifacts shipped to prepare for Run 10 launch. Phase 1.6
+(sequence_context stub + FinnGen INFO log) is deferred â€” neither is a
+Run 10 blocker.
+
+### 1. NEW: `scripts/launch_run10_vm.sh`
+
+Evolves `scripts/launch_run9_vm.sh` (97 lines) into a Run 10 launch
+script. Diffs from the Run 9 source:
+
+- **Non-interactive `vastai destroy`** â€” Run 9's launch script called
+  `vastai destroy instance "$INSTANCE_ID"` directly. `vastai` 1.0.12 is
+  interactive and would hang on a y/N prompt without TTY, defeating
+  auto-destroy on setup failure. Phase 1.7 pipes `echo y |` per memory
+  rule 30(c).
+- **Run 10 paths** â€” `OUT_BASE=/workspace/outputs/run10`, `RUN_ID=run10`,
+  per-ablation log `logs/run10_${ABL}.log`.
+- **Single 'full' ablation** â€” Run 10's narrow goal is the locked test
+  AUROC that Run 9 lost to `save()` crash. The Run 9 6-ablation matrix
+  (`full no_spliceai no_gnn no_alphamissense no_conservation
+  no_population_af`) is collapsed to `for ABL in full`. Run 10a will
+  extend the loop.
+- **Post-success expected-outputs banner** â€” points at the new per-model
+  joblib layout shipped by Phase 1 A2:
+  `models/<name>.joblib` + `models/orchestrator.joblib`. A future
+  observer of the Vast.ai log can confirm which files to SCP back.
+- **No SCP-back automation** â€” the existing manual SCP + manual destroy
+  pattern is preserved per INCIDENT_2026-04-29 (local-landing-receipt
+  rule). Server-side SCP-back-to-local requires a return tunnel the VM
+  doesn't have; the right place for that automation is the local
+  PowerShell runbook, not the VM script.
+
+Run 10 uses the existing `outputs/run9_ready/splits/` directory. LOVD
+and DbNSFP columns remain silent-zero (same as Run 9) because B1's
+`--lovd-path/--dbnsfp-path` are only exercised when splits are
+regenerated. **Run 10a** will re-regen via
+`scripts/run_phase2_eval.py --lovd-path ... --dbnsfp-path ...`. **Run 10b**
+will additionally pre-index the 30 GB FinnGen TSV to a ClinVar-intersected
+parquet before adding `--finngen-path`.
+
+### 2. PATCHED: `scripts/preflight_vm.sh`
+
+Four new sections inserted between section 8 (Critical Python imports)
+and the Summary section:
+
+- **Â§9 LOVD parquet** â€” `du -k` size threshold â‰¥ 100 KB at the canonical
+  path `data/external/lovd/lovd_all_variants.parquet`. WARN (not FAIL)
+  if absent â€” Run 10 tolerates the silent-zero pattern; Run 10a/10b
+  require it.
+- **Â§10 DbNSFP parquet** â€” `du -m` size threshold â‰¥ 20 MB at the
+  canonical path. WARN-on-absent contract matches Â§9.
+- **Â§11 FinnGen TSV (optional, warn-only)** â€” present-or-warn at the
+  canonical 30 GB path. Run 10b will tighten this to FAIL once the
+  pre-indexed parquet is the deployment artifact.
+- **Â§12 sklearn + lightgbm 1000-row LGBMClassifier smoke fit** â€”
+  catches the Phase 1.5b false-alarm pattern (`check_X_y() got an
+  unexpected keyword argument 'force_all_finite'`) BEFORE GPU billing
+  starts. The OOF wrapper in `variant_ensemble.py` silently downgrades
+  lightgbm-fit failures to ERROR + skip-the-model, so a real skew
+  would only surface after ~11h of training. The smoke fit makes that
+  surface at preflight time instead.
+
+Each section uses the existing `pass`/`fail`/`warn` macros so the
+summary line at the bottom counts correctly.
+
+### 3. NEW: `logs/training/run9_master.log.recovery.md`
+
+Full SSH `tail -100` capture of Run 9's `/workspace/run9_master.log`,
+retrieved 2026-05-13 before Vast.ai instance 36588175 was destroyed.
+The original 273-line / 264 KB master log was never SCP'd back; the
+last 100 lines (the failure-relevant region with full traceback) are
+the only surviving copy outside chat transcripts.
+
+The recovery file includes:
+- Reconstructed timeline (16-row table from earlier SSH queries)
+- All 11 per-model OOF AUROCs (lightgbm 0.9911 best, cnn_1d 0.5000
+  anomalous)
+- Blend weights from Nelder-Mead (random_forest 0.3377, xgboost 0.0434,
+  lightgbm 0.2933, ...)
+- Verbatim `tail -100` block (RuntimeWarnings, deep_ensemble fit
+  members, blend log, full PicklingError traceback, ABORT line)
+- Cross-references to filed incidents and Phase 1 fixes
+
+### Open follow-up flagged during Phase 1.7
+
+- **`cnn_1d OOF AUROC: 0.5000`** in Run 9 is anomalous. The same class
+  (`CNN1D._build_model.<locals>._CNN1D`) that broke pickle may also
+  have failed silently at fit time. The Phase 1 A1 fix repairs the
+  pickle path but doesn't address a hypothetical fit-side bug. Worth
+  checking after Run 10's locked test result is in.
+- **`requirements-api.lock` vs `requirements.txt` version split** â€”
+  `fastapi==0.119.1` / `starlette==0.48.0` in the lock file vs
+  `fastapi==0.135.2` / `starlette==1.0.0` in `requirements.txt`. Driven
+  by `prometheus-fastapi-instrumentator==7.1.0` requiring `starlette<1.0`.
+  These coexist because the Docker multi-stage build installs them in
+  separate stages (api vs trainer per memory rule 19). Non-blocking,
+  but memory rule 20's deferred fix is still open.
+
+### Phase 1 cumulative state after 1.7
+
+- Phase 1 regression suite: **5/5 GREEN** (unchanged since 1.5e)
+- Full unit-test sweep: **501/501 GREEN** (unchanged since 1.5e)
+- Launch readiness: scripts in place, preflight covers all Run 10
+  failure modes seen to date
+- Cost-budget for Run 10: ~$10â€“12 for ~11h on Vast.ai RTX 4090
+  (matches Run 9 wall-clock; no regen step in Run 10)
+- Time-to-result: ~12h from SCP-up to locked test AUROC in
+  `outputs/run10/full/metrics.json`
+
