@@ -36,6 +36,7 @@ activate once the consolidation lands. Once the imports are stable, the
 skip path should be removed in a follow-up commit.
 """
 from __future__ import annotations
+import pandas as pd
 
 from pathlib import Path
 import pytest

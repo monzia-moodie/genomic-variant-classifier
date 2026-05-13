@@ -1380,3 +1380,70 @@ floating could re-introduce the issue. Track in Phase 1.7
 Ready to advance: Phase 1.6 (`sequence_context.py` stub + optional FinnGen
 INFO log) or directly to Phase 1.7 (launch script rewrite).
 
+# Phase 1.5e CHANGELOG entry
+
+Append this block to `docs/CHANGELOG.md` (after the existing
+`## 2026-05-13 (post-1.5c) — Phase 1.5d:` entry).
+
+---
+
+## 2026-05-13 (post-1.5d) — Phase 1.5e: module-level pandas import for LOVD test
+
+Phase 1.5d's assertion rewrite used `pd.concat([X_train, X_val, X_test], ignore_index=True)`
+at module/test-function scope, but the test file imports pandas only
+inside fixture functions (e.g. `import pandas as pd` inside
+`tiny_clinvar_parquet`). Test-body code therefore raised:
+
+```
+NameError: name 'pd' is not defined
+```
+
+### Why the Phase 1.5d WARN missed this
+
+The Phase 1.5d applier had this check:
+
+```python
+if "import pandas" not in text:
+    print("WARN: pandas not imported in target file. ...")
+```
+
+Naive substring match. The file has `    import pandas as pd` (indented,
+inside a fixture body), which contains the substring `"import pandas"`,
+so the WARN never fired. The check should have been anchored at line
+start with `re.MULTILINE` to detect only module-level imports.
+
+### Fix (1.5e)
+
+Single-purpose applier `apply_phase1_5e.py` that:
+
+1. Checks for **module-level** `import pandas` via
+   `re.compile(r'^import pandas(\s|$)', re.MULTILINE)` — distinguishes
+   `import pandas as pd` at column 0 from `    import pandas as pd`
+   inside a function body
+2. If absent, inserts `import pandas as pd` at the best available
+   location:
+   - After `from __future__ import annotations` (preferred)
+   - After the module docstring (fallback)
+   - At the very top (last resort)
+3. Idempotent (status: `ALREADY` if module-level import exists)
+
+Sandbox-verified against four scenarios: in-fixture-only (production
+state), already-module-level, no-`__future__`, bare file with neither
+docstring nor `__future__`. All produce correct insertion or no-op.
+
+### Lesson learned — future appliers
+
+Any future applier that depends on a module-level import being present
+should check with `re.compile(r'^import <pkg>', re.MULTILINE)` rather
+than naive substring match. Memory rule 28 (apply-batch hygiene)
+extended implicitly.
+
+### Cumulative test state after 1.5e
+
+- `tests/unit/test_variant_ensemble_save_load.py`: 3 PASSED
+- `tests/unit/test_lovd_annotation_reaches_training_matrix.py`: 2 PASSED
+
+Phase 1 regression suite GREEN end-to-end. Ready to advance to Phase 1.6
+(`sequence_context.py` stub + optional FinnGen INFO log) or directly to
+Phase 1.7 (launch script + requirements pinning).
+
