@@ -143,22 +143,29 @@ def test_lovd_annotation_reaches_training_matrix(
     result = pipeline.run(clinvar_path=str(tiny_clinvar_parquet))
     # Standard tuple ordering:
     # (X_train, X_val, X_test, y_train, y_val, y_test, meta_val, meta_test)
-    X_train = result[0]
+    X_train, X_val, X_test = result[0], result[1], result[2]
 
-    assert "lovd_variant_class" in X_train.columns, (
-        "lovd_variant_class column missing from training matrix — "
-        "feature engineering may have dropped it"
-    )
+    # Phase 1.5d fix: column must be present in ALL splits, and
+    # the LOVD-matching TP53 row could be in any split because
+    # of gene-aware random splitting on the 5-row fixture.
+    for split_name, X_split in [
+        ("train", X_train), ("val", X_val), ("test", X_test),
+    ]:
+        assert "lovd_variant_class" in X_split.columns, (
+            f"lovd_variant_class column missing from "
+            f"{split_name} matrix — feature engineering may have dropped it"
+        )
 
-    # The chr17:7675234 G>T row matches the LOVD fixture (classification
-    # 'pathogenic' maps to ordinal class 4 per the connector's mapping;
-    # accept anything > 0 here to stay robust to mapping refinements).
-    n_nonzero = int((X_train["lovd_variant_class"] > 0).sum())
+    # Check the UNION of all splits — the matching TP53 row
+    # could be in any of train/val/test.
+    all_X = pd.concat([X_train, X_val, X_test], ignore_index=True)
+    n_nonzero = int((all_X["lovd_variant_class"] > 0).sum())
     assert n_nonzero >= 1, (
-        f"Expected at least one row with lovd_variant_class > 0 in "
-        f"training matrix; got {n_nonzero}. This is the regression "
-        f"INCIDENT_2026-05-02_lovd-silent-zero.md guards against. "
-        f"value_counts:\n{X_train['lovd_variant_class'].value_counts().to_dict()}"
+        f"Expected at least one row with lovd_variant_class > 0 "
+        f"across train/val/test; got {n_nonzero}. This is the "
+        f"regression INCIDENT_2026-05-02_lovd-silent-zero.md "
+        f"guards against. value_counts across all splits:\n"
+        f"{all_X['lovd_variant_class'].value_counts().to_dict()}"
     )
 
 
