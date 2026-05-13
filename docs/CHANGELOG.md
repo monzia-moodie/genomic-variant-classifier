@@ -1225,3 +1225,80 @@ the risk on `main`). The correction lives here and will be referenced by any
 future audit. Future commit messages should phrase FinnGen as "fully wired"
 alongside LOVD and DbNSFP.
 
+# Phase 1.5c CHANGELOG entry
+
+Append this block to `docs/CHANGELOG.md` (after the existing
+`## 2026-05-13 (post-1.5) — Phase 1.5b:` entry).
+
+---
+
+## 2026-05-13 (post-1.5b) — Phase 1.5c: LOVD anchor fix + sklearn/lightgbm skew workaround
+
+Phase 1.5b shipped two fixes but only one landed cleanly (commit `f64c024`).
+This entry corrects the remaining failures.
+
+### Issue 1 — Phase 1.5b LOVD anchors didn't match production indentation
+
+The `apply_phase1_5b.py` applier used `str_replace`-style anchors with fixed
+8-space body indentation, which assumed tests were wrapped in a `class TestLOVDPropagation:`.
+Production tests are top-level functions with 4-space body indentation. Both
+anchors (L1, L2) returned `[ERROR: anchor not found]` and the LOVD test file
+was left untouched. The 2 LOVD tests continued to fail with the original
+`ValueError: Gene-aware split 'train' missing class(es)`.
+
+**Fix (1.5c):** indent-aware patcher in `apply_phase1_5c.py`. Locates each
+`DataPrepConfig(...)` block by its `output_dir` marker (`"splits"` or
+`"splits_no_lovd"`), parses the closing-paren indent and argument indent
+dynamically from the block itself, and inserts `require_both_classes=False`
+with matching indent. Works for both top-level functions (4-space body) and
+class-wrapped methods (8-space body). Sandbox-verified against both layouts.
+
+### Issue 2 — lightgbm OOF silently dropped due to sklearn 1.6+ API rename
+
+The Phase 1.5b ensemble test fitted `lightgbm` + `cnn_1d` and asserted both
+landed in `trained_models_`. Production run logged:
+
+```
+ERROR  lightgbm OOF failed:
+  check_X_y() got an unexpected keyword argument 'force_all_finite' — skipping.
+```
+
+`scikit-learn` 1.6 renamed `force_all_finite` → `ensure_all_finite`. lightgbm
+versions before 4.4 still call sklearn with the old argument name. The
+`VariantEnsemble.fit()` OOF loop catches the exception, logs an `ERROR`,
+and silently continues with the model dropped from `trained_models_`. The
+test then sees only `{cnn_1d}` instead of the expected `{lightgbm, cnn_1d}`
+and fails.
+
+**Important: this is an environment issue, not a code bug.** Run 9 on
+Vast.ai produced `lightgbm OOF AUROC: 0.9911` (`outputs/run9_ready/regen.log`
+line 88), so the Vast.ai venv had a compatible combo at the time. The local
+venv must have drifted (likely sklearn pulled forward as a transitive dep).
+
+**Fix (1.5c, test only):** swap `lightgbm` → `random_forest` in
+`test_ensemble_save_load_with_cnn1d`. Random forest is pure-sklearn, so
+no skew is possible. The test still exercises both the tabular dispatch
+(via random_forest) and the sequence dispatch (via cnn_1d, which is what
+the A1 pickle fix actually targets).
+
+**Run 10 implication — DO NOT IGNORE.** Before Run 10 launch, verify the
+Vast.ai venv has a compatible sklearn/lightgbm combo. The diagnostic is:
+
+```powershell
+python -c "import sklearn, lightgbm; print(f'sklearn {sklearn.__version__}'); print(f'lightgbm {lightgbm.__version__}')"
+```
+
+If `sklearn >= 1.6` and `lightgbm < 4.4`, lightgbm OOF will be dropped at
+fit time. Fix on Vast.ai: `pip install -U lightgbm` (which brings in the
+`ensure_all_finite` rename) OR pin both in `requirements*.txt`. Run 9 best
+single-model was lightgbm; losing it for Run 10 would be a major regression.
+
+### What this bundle does NOT do
+
+- Does NOT fix the local venv. The `pip install -U lightgbm` step is up
+  to Monzia. The test simply avoids triggering the skew.
+- Does NOT add the FinnGen `else`-branch INFO log noted in Phase 1.5b's
+  CHANGELOG entry. Still deferred to Phase 1.6+.
+- Does NOT touch production code in `variant_ensemble.py` or
+  `run_phase2_eval.py`. The 66593d6 production patches remain correct.
+

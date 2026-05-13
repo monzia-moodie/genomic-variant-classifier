@@ -134,6 +134,7 @@ def test_lovd_annotation_reaches_training_matrix(
         scale_features=False,
         test_fraction=0.4,
         random_state=42,
+        require_both_classes=False,  # Phase 1.5c: 5-row fixture too small for class-balanced split
     )
     pipeline = DataPrepPipeline(config=cfg, annotation_config=ann)
 
@@ -175,6 +176,7 @@ def test_lovd_annotation_silent_zero_when_path_omitted(
         scale_features=False,
         test_fraction=0.4,
         random_state=42,
+        require_both_classes=False,  # Phase 1.5c: 5-row fixture too small for class-balanced split
     )
     pipeline = DataPrepPipeline(config=cfg, annotation_config=ann)
     result = pipeline.run(clinvar_path=str(tiny_clinvar_parquet))

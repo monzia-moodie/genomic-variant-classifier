@@ -5,13 +5,19 @@ A1: _CNN1D lifted to module-level _CNN1DModule  (pickle fix)
 A2: VariantEnsemble.save() refactored to per-model checkpoints
 
 History:
-- 2026-05-13 run10_phase1_v2.zip: original tests shipped.
-- 2026-05-13 run10_phase1_5b.zip: tests 3 + 4 rewritten. The original
-  pair called ens.fit_minimal(...), a helper that exists in Claude's
-  sandbox draft but was never shipped to production variant_ensemble.py.
-  Symptom: AttributeError: 'VariantEnsemble' object has no attribute
-  'fit_minimal'. Replaced with one consolidated test that exercises a
-  real fit() on a restricted 2-model subset (lightgbm + cnn_1d).
+- 2026-05-13 run10_phase1_v2.zip: original tests shipped (tests 3+4
+  called fit_minimal, a non-existent helper).
+- 2026-05-13 run10_phase1_5b.zip: tests 3+4 rewritten as one
+  consolidated test_ensemble_save_load_with_cnn1d using lightgbm +
+  cnn_1d. The lightgbm OOF failed in production due to a
+  sklearn/lightgbm version skew:
+      check_X_y() got an unexpected keyword argument 'force_all_finite'
+  (sklearn >=1.6 renamed it to ensure_all_finite; older lightgbm still
+  calls the old name). lightgbm got silently dropped from the OOF.
+- 2026-05-13 run10_phase1_5c.zip: swapped lightgbm -> random_forest
+  in the test. Pure sklearn, no version-skew risk. The lightgbm/sklearn
+  skew itself is an environment issue tracked separately (verify
+  Vast.ai venv before Run 10 launch).
 
 Refs:
 - docs/incidents/INCIDENT_2026-05-12_cnn1d-pickle-nested-class.md
@@ -34,7 +40,7 @@ def synthetic_data():
     Sized for:
     - 5-fold StratifiedKFold (default n_folds): 12 rows/fold, 6 of each class
     - CNN1D default batch_size: ~2 batches/fold
-    - Full 2-model fit (lightgbm + cnn_1d) under ~15s on CPU
+    - Full 2-model fit (random_forest + cnn_1d) under ~60s on CPU
     """
     rng = np.random.default_rng(42)
     n = 60
@@ -108,44 +114,51 @@ def test_cnn1d_pickles_after_fit(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 3 (rewritten in 1.5b): A1 + A2 end-to-end save/load
+# Test 3 (rewritten in 1.5c): A1 + A2 end-to-end save/load
 # ---------------------------------------------------------------------------
 def test_ensemble_save_load_with_cnn1d(synthetic_data, tmp_path):
-    """A1 + A2 end-to-end: fit a 2-model subset (lightgbm + cnn_1d), save,
-    load via the classmethod, verify predict_proba on both branches.
+    """A1 + A2 end-to-end: fit a 2-model subset (random_forest + cnn_1d),
+    save, load via the classmethod, verify predict_proba on both branches.
 
-    Restricting base_estimators to 2 models keeps full fit() under ~15s.
-    CNN1D MUST be in the subset to exercise the pickle-fix code path —
-    that's the whole point of this test.
+    Why random_forest (not lightgbm)? Phase 1.5b used lightgbm, but a
+    sklearn/lightgbm version skew in some venvs causes lightgbm's OOF
+    to fail silently with:
+        check_X_y() got an unexpected keyword argument 'force_all_finite'
+    Sklearn 1.6+ renamed force_all_finite -> ensure_all_finite. Older
+    lightgbm versions still call the old name and fail. The fit()
+    try/except wrapper catches this and skips lightgbm, leaving the
+    test's assertion `trained == {lightgbm, cnn_1d}` to fail with only
+    cnn_1d present. random_forest is pure sklearn — no such skew.
 
-    Rewritten 2026-05-13 (run10_phase1_5b.zip) from the broken
-    test_ensemble_save_creates_per_model_checkpoints +
-    test_ensemble_load_roundtrip pair that referenced a non-existent
-    ens.fit_minimal() helper.
+    Restricting base_estimators to 2 models keeps full fit() under ~60s.
+    CNN1D MUST be in the subset to exercise the pickle-fix code path.
+
+    Rewritten 2026-05-13 (run10_phase1_5c.zip) to swap the failing
+    lightgbm model for random_forest.
     """
     pytest.importorskip("torch")
-    pytest.importorskip("lightgbm")
     from genomic_variant_classifier.models.variant_ensemble import (
         VariantEnsemble, EnsembleConfig,
     )
     X_tab, X_seq, y = synthetic_data
 
-    # Build ensemble, then restrict to 2 base models BEFORE fit().
-    # The full 8/11-model ensemble on 60 rows would take 60+ seconds even
-    # with n_jobs=1; the 2-model subset is the minimal exercise of A1+A2.
+    # Build ensemble, then restrict to 2 base models BEFORE fit()
     cfg = EnsembleConfig(n_jobs=1)
     ens = VariantEnsemble(cfg)
-    keep = {"lightgbm", "cnn_1d"}
+    keep = {"random_forest", "cnn_1d"}
     ens.base_estimators = {
         k: v for k, v in ens.base_estimators.items() if k in keep
     }
 
     ens.fit(X_tab, X_seq, y)
 
-    # After fit(), trained_models_ should contain both
+    # After fit(), trained_models_ should contain both. If either model
+    # was skipped (logged as "OOF failed: ... — skipping"), that's an
+    # environment issue worth investigating.
     trained = set(ens.trained_models_.keys())
     assert trained == keep, (
-        f"Expected {keep}, got {trained}. Did fit() skip a model?"
+        f"Expected {keep}, got {trained}. Did fit() skip a model? "
+        "Check the captured log for 'OOF failed: ... — skipping' messages."
     )
 
     # A2 save() — pass a fresh subdirectory path. The A2 patch may write
@@ -166,8 +179,7 @@ def test_ensemble_save_load_with_cnn1d(synthetic_data, tmp_path):
     )
 
     # predict_proba must work on both branches: tabular routing for
-    # lightgbm, sequence routing for cnn_1d. The dispatch logic lives
-    # inside VariantEnsemble.predict_proba.
+    # random_forest, sequence routing for cnn_1d
     proba1 = ens.predict_proba(X_tab, X_seq)
     proba2 = ens2.predict_proba(X_tab, X_seq)
 
