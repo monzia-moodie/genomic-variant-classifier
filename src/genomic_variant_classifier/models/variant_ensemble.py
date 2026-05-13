@@ -602,6 +602,66 @@ def encode_sequence(seq: str, window: int = 101) -> np.ndarray:
     return one_hot
 
 
+
+# ---------------------------------------------------------------------------
+# Module-level _CNN1DModule (Run 10 fix for INCIDENT_2026-05-12_cnn1d-pickle-
+# nested-class.md). Defined lazily so that `import variant_ensemble` does not
+# require torch, but bound to module globals on first use so pickle can resolve
+# the class by qualname `genomic_variant_classifier.models.variant_ensemble.
+# _CNN1DModule`.
+#
+# Why not just `import torch.nn as nn` at module top? Per memory: ESM-2 runs
+# in stub mode when torch is absent; we preserve that graceful-degradation
+# property for downstream connectors that may not need the CNN branch.
+#
+# Why not nested in _build_model? Run 9 crash: pickle of
+# CNN1DClassifier._build_model.<locals>._CNN1D fails because nested local
+# classes have no stable qualified name across processes.
+# ---------------------------------------------------------------------------
+_CNN1DModule = None  # populated by _ensure_cnn1d_module_class() on first use
+
+
+def _ensure_cnn1d_module_class():
+    """Define _CNN1DModule at module level on first call; idempotent."""
+    global _CNN1DModule
+    if _CNN1DModule is not None:
+        return _CNN1DModule
+
+    import torch.nn as nn
+
+    class _CNN1DModule(nn.Module):  # noqa: F811 — intentional global shadow
+        def __init__(self, filters, kernel_size, dropout):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Conv1d(4, filters, kernel_size, padding=kernel_size // 2),
+                nn.ReLU(),
+                nn.MaxPool1d(2),
+                nn.Conv1d(
+                    filters, filters * 2, kernel_size, padding=kernel_size // 2
+                ),
+                nn.ReLU(),
+                nn.AdaptiveMaxPool1d(1),
+                nn.Flatten(),
+                nn.Linear(filters * 2, 128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(128, 1),
+                nn.Sigmoid(),
+            )
+
+        def forward(self, x):
+            return self.net(x).squeeze(-1)
+
+    # Crucial for pickle: fix the qualname so it resolves to the module-level
+    # name, not the nested-function locals path.
+    _CNN1DModule.__name__ = "_CNN1DModule"
+    _CNN1DModule.__qualname__ = "_CNN1DModule"
+    _CNN1DModule.__module__ = __name__
+
+    globals()["_CNN1DModule"] = _CNN1DModule
+    return _CNN1DModule
+
+
 # ---------------------------------------------------------------------------
 # Sklearn-compatible 1D-CNN wrapper
 # ---------------------------------------------------------------------------
@@ -629,35 +689,14 @@ class CNN1DClassifier(BaseEstimator, ClassifierMixin):
         self.classes_ = np.array([0, 1])
 
     def _build_model(self):
-        import torch
-        import torch.nn as nn
-
+        # Run 10 fix: module-level _CNN1DModule (was nested local class in
+        # Run 9 -> PicklingError crashed ensemble.save() at the end of the
+        # 11.4h training run). See docs/incidents/
+        # INCIDENT_2026-05-12_cnn1d-pickle-nested-class.md
+        import torch  # noqa: F401  (kept for torch.manual_seed below)
         torch.manual_seed(self.random_state)
-
-        class _CNN1D(nn.Module):
-            def __init__(self, filters, kernel_size, dropout):
-                super().__init__()
-                self.net = nn.Sequential(
-                    nn.Conv1d(4, filters, kernel_size, padding=kernel_size // 2),
-                    nn.ReLU(),
-                    nn.MaxPool1d(2),
-                    nn.Conv1d(
-                        filters, filters * 2, kernel_size, padding=kernel_size // 2
-                    ),
-                    nn.ReLU(),
-                    nn.AdaptiveMaxPool1d(1),
-                    nn.Flatten(),
-                    nn.Linear(filters * 2, 128),
-                    nn.ReLU(),
-                    nn.Dropout(dropout),
-                    nn.Linear(128, 1),
-                    nn.Sigmoid(),
-                )
-
-            def forward(self, x):
-                return self.net(x).squeeze(-1)
-
-        return _CNN1D(self.filters, self.kernel_size, self.dropout)
+        cls = _ensure_cnn1d_module_class()
+        return cls(self.filters, self.kernel_size, self.dropout)
 
     def _encode_X(self, X):
         if isinstance(X, pd.Series):
@@ -1212,7 +1251,17 @@ class VariantEnsemble:
         y_arr = np.asarray(y)
         results: dict[str, dict] = {}
         for name, model in self.trained_models_.items():
-            X_input = X_seq if name == "cnn_1d" else X_tab.values
+            # Run 10 fix: mirror the same 3-way dispatch used in
+            # fit() and predict_proba(). CatBoost requires a DataFrame
+            # (column names drive categorical-feature resolution); the
+            # previous code called .values for catboost too and would
+            # crash on the cb_wrapper's pandas-only input contract.
+            if name == "cnn_1d":
+                X_input = X_seq
+            elif name == "catboost":
+                X_input = X_tab
+            else:
+                X_input = X_tab.values
             proba = model.predict_proba(X_input)[:, 1]
             preds = (proba > 0.5).astype(int)
             results[name] = {
@@ -1243,16 +1292,127 @@ class VariantEnsemble:
         return df
 
     def save(self, path: Optional[Path] = None) -> None:
+        """Persist the ensemble.
+
+        Run 10 refactor: each base model is pickled into its own joblib
+        first; a thin orchestrator joblib then references them by name.
+        A single-model pickle failure (e.g. Run 9's CNN1D nested-class
+        crash) now degrades gracefully instead of poisoning the whole
+        save. The orchestrator records save_errors so downstream load()
+        can warn about missing models without crashing.
+        """
         import joblib
 
         path = Path(path or self.config.model_dir / "ensemble.joblib")
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self, path)
+
+        # Per-model checkpoints sit in <path>_models/ next to the orchestrator.
+        models_dir = path.parent / f"{path.stem}_models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_model_paths: dict = {}
+        save_errors: dict = {}
+        for name, model in self.trained_models_.items():
+            model_path = models_dir / f"{name}.joblib"
+            try:
+                joblib.dump(model, model_path)
+                saved_model_paths[name] = model_path.name
+                logger.info("  Saved base model %s -> %s", name, model_path)
+            except Exception as exc:
+                save_errors[name] = f"{type(exc).__name__}: {exc}"
+                logger.error("  FAILED to save base model %s: %s", name, exc)
+
+        orchestrator = {
+            "format_version": 2,
+            "config": self.config,
+            "meta_learner": self.meta_learner,
+            "blend_weights_": self.blend_weights_,
+            "feature_names_": getattr(self, "feature_names_", None),
+            "oof_predictions_": getattr(self, "oof_predictions_", None),
+            "oof_model_names_": getattr(self, "oof_model_names_", None),
+            "saved_model_paths": saved_model_paths,
+            "save_errors": save_errors,
+            "models_dir_name": models_dir.name,
+        }
+        try:
+            joblib.dump(orchestrator, path)
+        except Exception as exc:
+            logger.error(
+                "Orchestrator save FAILED but %d/%d base models survived at %s. "
+                "Error: %s", len(saved_model_paths), len(self.trained_models_),
+                models_dir, exc,
+            )
+            raise
+
         _write_model_manifest(path)
-        logger.info("Ensemble saved to %s", path)
+        if save_errors:
+            logger.warning(
+                "Ensemble persisted with %d/%d models failing to pickle: %s",
+                len(save_errors), len(self.trained_models_),
+                list(save_errors.keys()),
+            )
+        logger.info(
+            "Ensemble saved to %s (orchestrator + %d base models in %s/)",
+            path, len(saved_model_paths), models_dir.name,
+        )
 
     @classmethod
     def load(cls, path: Path) -> "VariantEnsemble":
+        """Load an ensemble.
+
+        Back-compatible with the pre-Run-10 single-joblib format AND
+        with the new format_version=2 orchestrator + per-model layout.
+        """
         import joblib
 
-        return joblib.load(path)
+        path = Path(path)
+        obj = joblib.load(path)
+
+        # Legacy: single joblib containing a pickled VariantEnsemble.
+        if isinstance(obj, cls):
+            return obj
+
+        if not isinstance(obj, dict) or obj.get("format_version") != 2:
+            raise ValueError(
+                f"Unrecognised ensemble joblib format at {path}: "
+                f"expected VariantEnsemble or format_version=2 dict, "
+                f"got {type(obj).__name__}"
+            )
+
+        ens = cls.__new__(cls)
+        ens.config = obj["config"]
+        ens.meta_learner = obj["meta_learner"]
+        ens.blend_weights_ = obj["blend_weights_"]
+        ens.feature_names_ = obj.get("feature_names_")
+        ens.oof_predictions_ = obj.get("oof_predictions_")
+        ens.oof_model_names_ = obj.get("oof_model_names_")
+        ens.base_estimators = {}
+        ens.trained_models_ = {}
+
+        models_dir = path.parent / obj["models_dir_name"]
+        load_errors = {}
+        for name, model_filename in obj["saved_model_paths"].items():
+            model_path = models_dir / model_filename
+            try:
+                ens.trained_models_[name] = joblib.load(model_path)
+            except Exception as exc:
+                load_errors[name] = f"{type(exc).__name__}: {exc}"
+                logger.error(
+                    "Failed to reload base model %s from %s: %s",
+                    name, model_path, exc,
+                )
+
+        if obj.get("save_errors"):
+            logger.warning(
+                "Ensemble was saved with %d models that failed to pickle: %s. "
+                "Predictions will use whatever base models DID survive.",
+                len(obj["save_errors"]), list(obj["save_errors"].keys()),
+            )
+        if load_errors:
+            logger.warning(
+                "Failed to reload %d/%d base models: %s",
+                len(load_errors), len(obj["saved_model_paths"]),
+                list(load_errors.keys()),
+            )
+
+        return ens

@@ -60,6 +60,35 @@ def parse_args() -> argparse.Namespace:
         help="Path to gnomAD v4.1 constraint TSV "
         "(data/external/gnomad/gnomad.v4.1.constraint_metrics.tsv)",
     )
+    # Run 10 wiring fix (INCIDENT_2026-05-02_lovd-silent-zero.md + Run 9
+    # regen.log): scripts/train.py already passes these three to
+    # AnnotationConfig, but scripts/run_phase2_eval.py never did, so all
+    # three connectors took their "no parquet loaded" silent-zero branch
+    # for the full 1.7M-row Run 9 cohort. AnnotationConfig already has
+    # these fields (verified against scripts/train.py:167-172).
+    p.add_argument(
+        "--lovd-path",
+        default=None,
+        help="LOVD all-variants parquet "
+        "(data/external/lovd/lovd_all_variants.parquet). "
+        "When omitted, lovd_variant_class is identically 0 (Run 9 bug).",
+    )
+    p.add_argument(
+        "--dbnsfp-path",
+        default=None,
+        help="DbNSFP4 ClinVar-intersected parquet cache "
+        "(data/external/dbnsfp/dbnsfp_clinvar_index.parquet). "
+        "When omitted, all dbNSFP-backed scores fall back to "
+        "population-median defaults (Run 9 bug).",
+    )
+    p.add_argument(
+        "--finngen-path",
+        default=None,
+        help="FinnGen R12 annotated variants TSV (gzipped) "
+        "(data/external/finngen/finnge_R12_annotated_variants_v1.gz). "
+        "When omitted, finngen_af_fin/finngen_af_nfsee/finngen_enrichment "
+        "default to 0/0/1 (Run 9 bug).",
+    )
     p.add_argument("--skip-nn", action="store_true")
     p.add_argument(
         "--string-db",
@@ -137,6 +166,10 @@ def main() -> int:
             gnomad_constraint_path=(
                 Path(args.gnomad_constraint) if args.gnomad_constraint else None
             ),
+            # Run 10 wiring fix (3 connectors silent-zero in Run 9)
+            lovd_path=Path(args.lovd_path) if args.lovd_path else None,
+            dbnsfp_path=Path(args.dbnsfp_path) if args.dbnsfp_path else None,
+            finngen_path=Path(args.finngen_path) if args.finngen_path else None,
         )
         prep = DataPrepPipeline(
             config=DataPrepConfig(
@@ -425,6 +458,14 @@ def main() -> int:
                 getattr(args, "string_db", None),
             )
 
+        # Run 10 ordering fix (INCIDENT_2026-05-12_no-per-model-checkpoint
+        # and INCIDENT_2026-05-12_oof-blend-vs-locked-test): perform
+        # test/val evaluation BEFORE ensemble.save(). Run 9 lost its
+        # locked-test AUROC because save() crashed first; the OOF blend
+        # AUROC was the only headline number available, and it is not a
+        # substitute for held-out test evaluation.
+        logger.info("Evaluating ensemble on held-out test + val splits "
+                    "(BEFORE save, defensive)")
         results = ensemble.evaluate(X_test, seq_te, y_test)
         val_results = ensemble.evaluate(X_val, seq_val, y_val)
 
@@ -449,6 +490,9 @@ def main() -> int:
             "n_features": int(X_train.shape[1]),
         }
 
+        # Flush all scientific artifacts BEFORE save(). If joblib.dump
+        # crashes (Run 9's _CNN1D pickle bug), we still have AUROC numbers
+        # on disk to inform whether to re-launch.
         (outdir / "metrics.json").write_text(json.dumps(m, indent=2))
         results.to_csv(outdir / "per_model_metrics.csv")
         val_results.to_csv(outdir / "per_model_metrics_val.csv")
@@ -456,6 +500,22 @@ def main() -> int:
         meta.to_parquet(outdir / "meta_test.parquet", index=False)
         meta_val.to_parquet(outdir / "meta_val.parquet", index=False)
         _save_feature_importance(ensemble, list(X_train.columns), outdir)
+
+        # OOF predictions for downstream ablation tooling. Already on
+        # ensemble.oof_predictions_ but pinning to parquet decouples
+        # ablation harnesses from joblib reload success.
+        try:
+            import numpy as _np  # noqa: F811
+            _oof = getattr(ensemble, "oof_predictions_", None)
+            _names = getattr(ensemble, "oof_model_names_", None)
+            if _oof is not None and _names is not None:
+                _oof_df = pd.DataFrame(_oof, columns=list(_names))
+                _oof_df.to_parquet(outdir / "oof_predictions.parquet",
+                                   index=False)
+                logger.info("OOF predictions flushed to %s/oof_predictions.parquet",
+                            outdir)
+        except Exception as _exc:
+            logger.warning("Could not flush OOF predictions: %s", _exc)
 
         auroc = m["auroc"]
         val_auroc = m["val_auroc"]
