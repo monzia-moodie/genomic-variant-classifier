@@ -287,3 +287,182 @@ This INCIDENT is OPEN. Will be moved to RESOLVED when R10-A through
 R10-C are complete and the post-condition assertion in R10-C passes.
 R10-D (originally-requested gene scope expansion) does not gate
 RESOLVED status — it can ship as a separate Run 11 if scope warrants.
+
+---
+
+## 2026-05-13 Update — Actual root cause identified; both prior candidates falsified
+
+### Status update
+
+OPEN → **ROOT CAUSE IDENTIFIED**; RESOLUTION SHIPPING IN PHASE 1 PATCH
+BUNDLE (`run10_phase1_v2.zip`, patch B1). Pending apply + Run 10 dry-run
+confirmation, status moves to RESOLVED.
+
+### Both prior candidates falsified
+
+The original INCIDENT (2026-05-02) narrowed the cause to two candidates
+pending log grep (R10-A):
+
+- Cause 1 — Downstream column overwrite in `_engineer_features` or
+  similar post-connector step
+- Cause 2 — Upstream coordinate transformation by one of the 14 prior
+  `annotate_dataframe` calls
+
+Both are wrong. The actual cause is a **third unconsidered candidate**:
+the LOVD connector is never given a path to its data file in the
+Run 9 launch path.
+
+### Evidence
+
+Two source files were compared on 2026-05-13:
+
+**`scripts/train.py` lines 167–172** (works correctly, used in pre-Run-9
+local CPU train.py runs per CHANGELOG 2026-04-16):
+
+```python
+annotation_config = AnnotationConfig(
+    alphamissense_path=Path(args.alphamissense) if args.alphamissense else None,
+    lovd_path=Path(args.lovd_path) if args.lovd_path else None,
+    finngen_path=Path(args.finngen_path) if args.finngen_path else None,
+    dbnsfp_path=Path(args.dbnsfp_path) if args.dbnsfp_path else None,
+)
+```
+
+**`scripts/run_phase2_eval.py` lines 119–127** (silent-zero, used for
+Run 9 splits regen on 2026-04-30 AND Run 9 training on 2026-05-12):
+
+```python
+ann = AnnotationConfig(
+    spliceai_path=Path(args.spliceai) if args.spliceai else None,
+    alphamissense_path=Path(args.alphamissense) if args.alphamissense else None,
+    gtex_genes=args.gtex_genes or [],
+    kg_path=Path(args.kg) if args.kg else None,
+    gnomad_constraint_path=(
+        Path(args.gnomad_constraint) if args.gnomad_constraint else None
+    ),
+)
+```
+
+`AnnotationConfig` HAS the `lovd_path`, `dbnsfp_path`, and `finngen_path`
+fields (proven by `train.py` constructing with all three). The Run 9
+launch path simply never passes them. The LOVD connector then receives
+`parquet_path=None` from the default, takes its "no parquet loaded"
+silent branch, and returns 0 for all variants.
+
+### Verification from Run 9 regen.log
+
+The 2026-04-30 splits regen (which Run 9 inherited) is the relevant log
+to grep. As of 2026-05-13 the local audit (`scripts/run9_outputs_audit.ps1`)
+scanned `outputs/run9_ready/regen.log` for AUROC patterns but did not
+capture LOVD-specific lines. Direct verification command:
+
+```powershell
+Select-String -Path outputs\run9_ready\regen.log -Pattern "LOVD"
+```
+
+Expected output: the silent-branch INFO message from the LOVDConnector
+(approximately `"no parquet loaded — all variants will receive
+lovd_variant_class=0"` or similar wording from the connector's
+default-path branch). If this message is found, it confirms the
+launch-script wiring gap as the cause and falsifies Cause 2 (which
+hypothesizes the connector successfully loaded but got zero matches
+post-merge). If a different LOVD line appears (e.g., "Score annotation
+15/16 (LOVD): 5553 variants ..."), Cause 1 (downstream column
+overwrite) is back in play and B1 patch is insufficient.
+
+### Same bug class affects 2 other connectors
+
+The same wiring gap applies to DbNSFP and FinnGen. Per `scripts/train.py`
+(verified entry-point reference):
+
+- **DbNSFP** SIFT/PolyPhen-2/REVEL/MutationTaster/FATHMM/CADD —
+  `train.py` log showed 204,384 real SIFT scores when wired
+- **FinnGen** finngen_af_fin/finngen_af_nfsee/finngen_enrichment —
+  `train.py` log showed 123,990 matches (7.3%) when wired
+- **LOVD** lovd_variant_class — ~5,553 expected matches per the
+  diagnostic merge documented in the 2026-05-02 evidence section
+
+Run 9 (which used `scripts/run_phase2_eval.py` for splits regen, not
+`train.py`) was unknowingly starved of all three. Verification commands:
+
+```powershell
+Select-String -Path outputs\run9_ready\regen.log -Pattern "DbNSFP|dbNSFP"
+Select-String -Path outputs\run9_ready\regen.log -Pattern "FinnGen|finngen"
+```
+
+Expected: similar "no data file" / "default scores" messages for both.
+
+### Why prior analysis missed this
+
+The 2026-05-02 INCIDENT focused on the **connector code path** (call
+site at `real_data_prep.py:738`, diagnostic merge against
+`clinvar_enriched.parquet`) and the **on-disk data**
+(`lovd_all_variants.parquet` schema and row count). Both checked out.
+The investigation did not extend up to the **launch script's**
+AnnotationConfig construction because the silent-zero pattern matched
+"connector internal" failure modes (SpliceAI in run 8, ESM-2 in runs
+6-8). The launch-script wiring level was a blind spot.
+
+A clean diagnostic in retrospect would have been:
+
+```bash
+grep -n "AnnotationConfig" scripts/*.py
+# Check whether train.py and run_phase2_eval.py construct identically
+```
+
+This is now a standing rule for future silent-zero investigations.
+
+### Resolution (Phase 1 patch B1)
+
+`scripts/run_phase2_eval.py` patches:
+
+1. Add `--lovd-path`, `--dbnsfp-path`, `--finngen-path` CLI args
+2. Pass them through to `AnnotationConfig` construction (mirroring
+   `train.py:167-172`)
+
+Both changes shipped in `run10_phase1_v2.zip` as a single str_replace
+patch each.
+
+### R10-* sequence — revised
+
+- ~~**R10-A** (log grep for "Score annotation 15/16 (LOVD)")~~ —
+  **SUPERSEDED.** The launch-script wiring gap (run_phase2_eval.py
+  never passing lovd_path) is the actual cause. Verification of the
+  expected silent-branch INFO message is still useful but no longer
+  blocking — see Verification command below.
+- **R10-B** (patch + post-condition unit test) — **SHIPPED** in
+  Phase 1 bundle. Patch is B1 in
+  `apply_run10_phase1_patches.py`. Post-condition test is
+  `tests/unit/test_lovd_annotation_reaches_training_matrix.py`.
+- **R10-C** (re-regen splits on Vast.ai with LOVD live) — pending Run 10
+  launch. Post-condition `nonzero >= 4500` assertion unchanged.
+- **R10-D** (gene-scope expansion beyond canonical 10) — unchanged;
+  manual browser downloads only per LOVD admin instructions, deferred
+  to Run 11+.
+
+### Lessons added
+
+- **Silent-zero investigation must extend up to the launch-script
+  configuration boundary.** Connector code + on-disk data + diagnostic
+  merge together cover three of the four layers. The fourth layer
+  (config construction in the launch script) was missed in the
+  2026-05-02 investigation. Standing rule for future audits:
+  `grep -rn "AnnotationConfig\\b" scripts/` and compare argument
+  counts/names across all entry points.
+- **Multiple entry points to the same pipeline must be kept in sync.**
+  `train.py` and `run_phase2_eval.py` both construct
+  `AnnotationConfig`. They have diverged silently over months. Going
+  forward, either (a) consolidate to a single config-construction
+  helper that both entry points call, or (b) add a CI check that
+  greps both files for `AnnotationConfig(` and reports field-list
+  diffs.
+
+### Sign-off (revised)
+
+INCIDENT moves to RESOLVED when:
+- Phase 1 patch bundle (`run10_phase1_v2.zip`) is applied
+- `pytest tests/unit/test_lovd_annotation_reaches_training_matrix.py` passes
+  (or skips with a documented import-path reason)
+- Run 10 splits regen on Vast.ai produces an `X_train.parquet` with
+  `(X_train["lovd_variant_class"] > 0).sum() >= 4500` per the R10-C
+  post-condition.
