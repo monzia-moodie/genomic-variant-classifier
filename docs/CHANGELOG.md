@@ -971,3 +971,154 @@ Docker build smoke test).
 - Session doc: `docs/sessions/SESSION_2026-05-10_spliceai-cache-fix.md`
 - New conftest: `tests/unit/conftest.py`
 - Prior session (arch cleanup, same day): `docs/sessions/SESSION_2026-05-10_arch-cleanup.md`
+## 2026-05-12 — Run 9: 11.4h training on Vast.ai RTX 4090, ensemble.save() crash, no test AUROC
+
+### Attempted
+- Launch Run 9 as 6-ablation suite (`full + 5 feature-group ablations`)
+  on Vast.ai RTX 4090 (instance 36588175, $0.473/hr).
+- Auto-destroy on preflight failure via vastai CLI `cleanup_if_setup_failed`
+  trap function in `scripts/launch_run9_vm.sh`.
+- Pickle entire fitted ensemble as a single joblib via
+  `joblib.dump(self, path)` in `VariantEnsemble.save()`.
+
+### Failed
+- **4 failed launch attempts** before successful launch (~10 min debug each):
+  - Attempt 1: workflow-aware preflight bugs (ClinVar VCF,
+    torch_geometric). Resolved by commits `8a3785a` + `bd75ed5`.
+  - Attempt 2: data SCP'd to repo-relative paths
+    (`/workspace/genomic-variant-classifier/data/...`) but
+    `launch_run9_vm.sh` uses `/workspace/{data,outputs}/` absolute paths.
+  - Attempt 3: training script used absolute paths while preflight
+    used repo-relative. Operator added symlinks ad-hoc.
+  - Attempt 4: `ln -s /workspace/genomic-variant-classifier/data
+    /workspace/data` placed symlink INSIDE the existing
+    `/workspace/data/` directory created in attempt 3 instead of
+    replacing it (silent Unix `ln` behaviour on existing-target).
+    `rm -rf` of the destination required before `ln -s`.
+- **Auto-destroy broken** in vastai CLI 1.0.12: interactive
+  `input()` confirmation fails under `nohup` with `OSError: Bad file
+  descriptor`. Manual destroy via Vast.ai web console at
+  https://cloud.vast.ai/instances/ after ~9h idle billing.
+- **`ensemble.save()` PicklingError** at end of 11.4h training:
+  `_CNN1D` defined inside `CNN1DClassifier._build_model.<locals>`
+  is not pickle-able. `joblib.dump()` crashed with
+  `_pickle.PicklingError: Can't pickle <class
+  'genomic_variant_classifier.models.variant_ensemble.CNN1DClassifier._build_model.<locals>._CNN1D'>:
+  it's not found as ...<locals>._CNN1D`. Joblib is corrupt; no
+  per-model checkpoints exist; locked test AUROC never produced.
+
+### Fixed (this session)
+- Workflow-aware preflight (commits `8a3785a` + `bd75ed5`) — landed
+  before final launch attempt.
+- Path mismatch — manual `mv` data into repo + symlink
+  `/workspace/{data,outputs}` → repo paths (workaround; canonical fix
+  deferred to Phase 1.5 launch-script unified patch).
+- Symlink trap — `rm -rf` before `ln -s` when destination might be
+  recreated as directory.
+
+### Drafted (shipped in 2026-05-13 follow-up session as `run10_phase1_v2.zip`)
+- Patch A1: `_CNN1D` lifted to module-level `_CNN1DModule` via lazy-
+  global with qualname fixup. Fixes pickle.
+- Patch A2: `VariantEnsemble.save()` refactored to per-model joblib
+  checkpoints (`<ensemble>_models/<model_name>.joblib`) + thin
+  orchestrator joblib. Single-model pickle failure no longer poisons
+  whole ensemble. `load()` back-compat with legacy single-joblib format.
+- Patch A3: `evaluate()` CatBoost dispatch fix (was missing the
+  DataFrame branch that `fit`/`predict_proba` correctly include).
+- Patch B1: `scripts/run_phase2_eval.py` — added `--lovd-path`,
+  `--dbnsfp-path`, `--finngen-path` CLI args + `AnnotationConfig`
+  wiring (mirrors `scripts/train.py:167-172`). Closes the
+  silent-zero gap for three connectors that were unknowingly absent
+  from Run 9 alongside LOVD. Supersedes R10-A of
+  `INCIDENT_2026-05-02_lovd-silent-zero.md` (see
+  `INCIDENT_2026-05-02_lovd-silent-zero_AMENDMENT.md`).
+- Patch B2 + B3: test-set evaluation + OOF parquet + `metrics.json`
+  flushed BEFORE `ensemble.save()` so a save crash never loses
+  scientific artifacts.
+- Regression tests: `tests/unit/test_variant_ensemble_save_load.py`
+  (4 tests) + `tests/unit/test_lovd_annotation_reaches_training_matrix.py`
+  (2 tests with importskip guard).
+
+### Results
+- OOF blend AUROC: **0.9916**
+- LR stacker AUROC: 0.9911
+- Best single base (lightgbm): 0.9911
+- **Δ blend over best single: +0.0005 — within noise floor** pending
+  bootstrap CI per `SESSION_2026-05-12.md` Run 10 plan §3.
+- No test-set AUROC: script crashed at save before test evaluation
+  ran. Phase 1 patch B2 moves test eval before save to prevent
+  recurrence.
+- **Per-model OOF AUROC table (2026-05-13 partial recovery via
+  `scripts/run9_outputs_audit.ps1`):** 8 of 11 base models recovered as
+  04-30 proxies (lightgbm 0.9911, xgboost 0.9908, catboost 0.9900,
+  gradient_boosting 0.9889, random_forest 0.9881, deep_ensemble 0.9872,
+  mc_dropout 0.9870, logistic_regression 0.9849). 4 NOT recoverable:
+  svm, kan, tabular_nn, cnn_1d (skipped in 04-30 regen). 11-dim
+  Nelder-Mead weight dict NOT recoverable beyond qualitative statement
+  (kan/tabular_nn/logistic_regression 0%, cnn_1d ~10%). See
+  `INCIDENT_2026-05-12_no-per-model-checkpoint.md` §Recovery status.
+- **Scientific finding from proxy comparison:** 04-30 8-model blend
+  was 0.9915 vs Run 9 11-model blend 0.9916. Adding 4 models
+  (svm/kan/tabular_nn/cnn_1d) moved blend by **+0.0001** — at or below
+  noise floor. Supports the §2 keep-all decision being conditional on
+  bootstrap CI.
+
+### Scientific implications (preliminary; full analysis in Run 10)
+- The 11-model ensemble adds essentially nothing over a single tuned
+  lightgbm in OOF blend. Δ=+0.0005 must be confirmed via bootstrap CI
+  before any pruning decision.
+- KAN (8h compute) received 0% blend weight. Drop candidate for
+  Run 10, deferred pending bootstrap CI per SESSION §2 amendment.
+- tabular_nn and logistic_regression received 0% blend weight.
+- cnn_1d received ~10% blend weight despite OOF AUROC ~0.5 (broken
+  signal — fed placeholder sequences per
+  `INCIDENT_2026-05-12_cnn1d-pickle-nested-class.md`). Investigate
+  whether this generalizes after pickle fix; Sequence Branch
+  (real FASTA) wiring deferred to Run 11.
+- Standing concern about gene-prevalence + external-score
+  memorization remains unresolved.
+
+### Learned (7 new standing rules — see SESSION doc §Learned)
+1. Vast.ai SCP destinations must be repo-relative or include explicit
+   symlink step in runbook.
+2. `vastai destroy ≥1.0.12` is interactive; auto-destroy in scripts
+   MUST pipe `yes` or `echo y`.
+3. `ln -s` does NOT replace existing real directories; use `rm -rf`
+   first when destination may have been recreated between fix attempts.
+4. PowerShell strips inner `"..."` from ssh command args — use single
+   quotes ONLY inside ssh wrappers, never double quotes.
+5. STOP putting bash code inside `ssh ... '<bash>'` from PowerShell.
+   Use `@'...'@ | ssh ... bash -s` with `-replace "`r`n", "`n"` to
+   strip CRLF.
+6. PowerShell `@'...'@` heredocs preserve `\r\n` line endings; always
+   `-replace "`r`n", "`n"` before piping to remote bash.
+7. Vast.ai 2026 PyTorch images auto-tmux + auto-activate `/venv/main`.
+   SCP destinations MUST be inside the cloned repo. Subprocess can
+   still use `/usr/local/bin/python` symlinks for non-activated calls.
+
+### Costs
+- Instance 36588175, Vast.ai RTX 4090, $0.473/hr
+- ~20.5h total wall-clock = **~$9.70**
+- ~9h of that was idle post-crash because auto-destroy was broken
+- Productive: ~$5.40 | Idle: ~$4.30
+
+### Commits
+- `3cfc039` — `docs(session): Run 9 launch, training, pickle crash, results`
+
+### Refs
+- Session doc: `docs/sessions/SESSION_2026-05-12.md`
+  (amended 2026-05-13 — §2 of Run 10 plan revised to keep-all; OOF
+  AUROC/blend-weight placeholders annotated with recovery pointer)
+- INCIDENTs (filed in 2026-05-13 follow-up session):
+  - `docs/incidents/INCIDENT_2026-05-12_cnn1d-pickle-nested-class.md`
+  - `docs/incidents/INCIDENT_2026-05-12_vastai-destroy-interactive.md`
+  - `docs/incidents/INCIDENT_2026-05-12_launch-path-inconsistency.md`
+  - `docs/incidents/INCIDENT_2026-05-12_no-per-model-checkpoint.md`
+- LOVD INCIDENT 2026-05-13 amendment: launch-script wiring gap
+  identified as actual root cause; supersedes Cause 1 + Cause 2
+  candidates. See `INCIDENT_2026-05-02_lovd-silent-zero.md`
+  §"2026-05-13 Update".
+- Phase 1 patch bundle: `run10_phase1_v2.zip` (shipped 2026-05-13)
+- Run 9 outputs audit: `scripts/run9_outputs_audit.ps1` (placed
+  2026-05-13)
+
