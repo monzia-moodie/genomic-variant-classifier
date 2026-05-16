@@ -1188,6 +1188,7 @@ class VariantEnsemble:
         # Expose OOF matrix for Rule-5 artefacts (Run 9+). Downstream
         # writers (scripts/run9_ablations.py) read these attributes.
         self.oof_predictions_ = oof_preds.copy()
+        self.oof_fit_indices_ = idx_fit
         self.oof_model_names_ = [
             n for n in self.base_estimators if n in self.trained_models_
         ]
@@ -1329,6 +1330,7 @@ class VariantEnsemble:
             "blend_weights_": self.blend_weights_,
             "feature_names_": getattr(self, "feature_names_", None),
             "oof_predictions_": getattr(self, "oof_predictions_", None),
+            "oof_fit_indices_": getattr(self, "oof_fit_indices_", None),
             "oof_model_names_": getattr(self, "oof_model_names_", None),
             "saved_model_paths": saved_model_paths,
             "save_errors": save_errors,
@@ -1385,6 +1387,7 @@ class VariantEnsemble:
         ens.blend_weights_ = obj["blend_weights_"]
         ens.feature_names_ = obj.get("feature_names_")
         ens.oof_predictions_ = obj.get("oof_predictions_")
+        ens.oof_fit_indices_ = obj.get("oof_fit_indices_")
         ens.oof_model_names_ = obj.get("oof_model_names_")
         ens.base_estimators = {}
         ens.trained_models_ = {}

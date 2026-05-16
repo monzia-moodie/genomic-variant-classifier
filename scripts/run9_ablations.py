@@ -702,12 +702,28 @@ def main() -> int:
                 )
             ],
         )
-        oof["label"] = y_train.values
-        oof["fold"] = -1
-        if "variant_id" in X_train.columns:
-            oof["variant_id"] = X_train["variant_id"].values
+        fit_idx = getattr(ensemble, "oof_fit_indices_", None)
+        n_oof = len(oof)
+        if fit_idx is not None and len(fit_idx) == n_oof:
+            oof["label"] = y_train.values[fit_idx]
+            oof["fold"] = -1
+            if "variant_id" in X_train.columns:
+                oof["variant_id"] = X_train["variant_id"].values[fit_idx]
+            else:
+                oof["variant_id"] = [f"train_{i}" for i in fit_idx]
+        elif n_oof == len(y_train):
+            oof["label"] = y_train.values
+            oof["fold"] = -1
+            if "variant_id" in X_train.columns:
+                oof["variant_id"] = X_train["variant_id"].values
+            else:
+                oof["variant_id"] = [f"train_{i}" for i in range(n_oof)]
         else:
-            oof["variant_id"] = [f"train_{i}" for i in range(len(oof))]
+            logger.warning(
+                "OOF length (%d) != y_train (%d) and no fit indices; "
+                "OOF export skipped.",
+                n_oof, len(y_train),
+            )
         writer.save_oof_predictions(oof)
     else:
         logger.warning(

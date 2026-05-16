@@ -1565,3 +1565,51 @@ The recovery file includes:
 - Time-to-result: ~12h from SCP-up to locked test AUROC in
   `outputs/run10/full/metrics.json`
 
+
+
+---
+
+## 2026-05-16 â€” Run 10: locked test AUROC produced
+
+### Attempted
+- Launch Run 10 on Vast.ai (instance 36853443, RTX 4090, datacenter 1647
+  Iceland) to produce the locked test AUROC that Run 9 failed to deliver.
+- 4 launch attempts before successful training start (path mismatch, missing
+  meta parquets, missing pykan, symlink fix).
+- Full 11-model ensemble training (~12 hr): RF, XGB, LGB, LR, GBM, CatBoost,
+  TabularNN, CNN1D, KAN (200 epochs), MC_Dropout, DeepEnsemble (5 members Ã— 5
+  folds).
+
+### Failed
+- Launches 1â€“3: `FileNotFoundError` on split files. Root cause: launch script
+  uses `SPLITS_DIR=/workspace/outputs/run9_ready/splits` but SCP put files at
+  `/workspace/genomic-variant-classifier/outputs/run9_ready/splits/`. Fix:
+  symlink.
+- Post-training OOF export crash at `run9_ablations.py:705`:
+  `ValueError: Length of values (1197216) does not match length of index
+  (1017633)`. `ensemble.oof_predictions_` has 85% of y_train rows. Crash
+  occurred AFTER locked test eval was written to disk. See
+  `INCIDENT_2026-05-16_oof-export-length-mismatch.md`.
+
+### Fixed / Achieved
+- **Locked test AUROC: 0.98163** (95% CI: 0.98126â€“0.98197).
+- OOF blend AUROC: 0.9916. Test-to-OOF gap ~0.01 (healthy).
+- All 11 per-model checkpoints + ensemble.joblib saved and SCP'd locally
+  (~4.2 GB total).
+- Evaluation artifacts saved: `eval_report.json`, `test_predictions.parquet`
+  (349,067 rows Ã— 20 cols), `calibration.parquet`, `manifest.json`.
+- Instance destroyed after full artifact retrieval.
+
+### Learned
+- PowerShell here-string `@"..."@` piped to SSH is unfixable for CRLF. Only
+  reliable pattern: `ssh ... 'single-line command'`. One command per SSH call.
+- `wc -l` returns 0 on `\r`-only files (KAN progress bars). Use `tail -c N`.
+- `meta_val.parquet` and `meta_test.parquet` are required by `load_splits()`
+  (8 files, not 6).
+- `pykan` must be explicitly installed on Vast.ai images.
+- Vast.ai CLI `vastai destroy` returns 401 when run FROM the instance itself;
+  use the web console instead.
+
+### Cost
+- Vast.ai instance 36853443: ~$7â€“9 (12 hr training + ~2 hr idle/debug)
+- Prior destroyed instance 36853984: ~$1 (auto-destroyed by preflight trap)
